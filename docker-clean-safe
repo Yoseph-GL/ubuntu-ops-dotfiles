@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: docker-clean-safe [--run] [--with-volumes]
+
+Safe Docker cleanup.
+Default mode is dry-run (shows what would be removed).
+Use --run to execute cleanup.
+
+Actions:
+- docker image prune -a (unused images)
+- docker container prune (stopped containers)
+- docker builder prune (build cache)
+- docker network prune (unused networks)
+- docker volume prune (only with --with-volumes)
+USAGE
+}
+
+log_info() { printf '[INFO] %s\n' "$*"; }
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+MODE="dry-run"
+WITH_VOLUMES=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run)
+      MODE="run"
+      shift
+      ;;
+    --with-volumes)
+      WITH_VOLUMES=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+echo "=== DOCKER CLEAN SAFE ==="
+echo "Mode: $MODE"
+echo "With volumes: $WITH_VOLUMES"
+echo
+
+command -v docker >/dev/null 2>&1 || die "Docker not available"
+docker system df
+echo
+
+if [[ "$MODE" == "dry-run" ]]; then
+  echo "[DRY RUN]"
+  echo "Would run:"
+  echo "  docker image prune -a -f"
+  echo "  docker container prune -f"
+  echo "  docker builder prune -f"
+  echo "  docker network prune -f"
+  if [[ "$WITH_VOLUMES" -eq 1 ]]; then
+    echo "  docker volume prune -f"
+  fi
+  echo
+  echo "Run with: docker-clean-safe --run [--with-volumes]"
+  exit 0
+fi
+
+log_info "Cleaning Docker artifacts"
+docker image prune -a -f
+docker container prune -f
+docker builder prune -f
+docker network prune -f
+if [[ "$WITH_VOLUMES" -eq 1 ]]; then
+  docker volume prune -f
+fi
+echo
+echo "[AFTER]"
+docker system df

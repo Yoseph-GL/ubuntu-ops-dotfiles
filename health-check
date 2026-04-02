@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: health-check [--run]
+
+Quick host diagnostics:
+- Uptime, load, memory, disk
+- Battery state (if available)
+- Top CPU processes
+- Key services (ssh, fail2ban, docker)
+- Common listening ports
+
+Default behavior is dry-run summary (what sections would run).
+Use --run to execute diagnostics.
+USAGE
+}
+
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+match_cmd() {
+  if command -v rg >/dev/null 2>&1; then
+    rg "$@"
+  else
+    grep -E "$@"
+  fi
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+MODE="dry-run"
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+elif [[ ${1:-} == "--run" ]]; then
+  MODE="run"
+elif [[ $# -gt 0 ]]; then
+  die "Unknown argument: $1"
+fi
+
+echo "=== HEALTH CHECK ==="
+echo "Mode: $MODE"
+echo
+echo "Would run sections:"
+echo "  [SYSTEM] [MEMORY] [DISK] [BATTERY] [TOP CPU] [SERVICES] [PORTS]"
+
+if [[ "$MODE" != "run" ]]; then
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+  exit 0
+fi
+
+echo "[SYSTEM]"
+printf 'Host: %s\n' "$(hostname)"
+printf 'Time: %s\n' "$(date '+%F %T %Z')"
+printf 'Uptime: %s\n' "$(uptime -p 2>/dev/null || true)"
+printf 'Load: %s\n' "$(uptime | awk -F'load average: ' '{print $2}')"
+echo
+
+echo "[MEMORY]"
+free -h | sed -n '1,3p'
+echo
+
+echo "[DISK]"
+df -h / | sed -n '1,2p'
+echo
+
+if command -v upower >/dev/null 2>&1; then
+  BAT_PATH="$(upower -e 2>/dev/null | grep -E 'battery|BAT' | head -n1 || true)"
+  if [[ -n "$BAT_PATH" ]]; then
+    echo "[BATTERY]"
+    upower -i "$BAT_PATH" | match_cmd -i 'state|percentage|time to empty|time to full' || true
+    echo
+  fi
+fi
+
+echo "[TOP CPU]"
+ps -eo pid,comm,%cpu,%mem --sort=-%cpu | sed -n '1,8p'
+echo
+
+echo "[SERVICES]"
+for svc in ssh ssh.socket fail2ban docker; do
+  printf '%-12s %s\n' "$svc" "$(systemctl is-active "$svc" 2>/dev/null || echo 'n/a')"
+done
+echo
+
+echo "[PORTS]"
+ss -lntp 2>/dev/null | match_cmd ':(22|80|443|8000|8001|9443)\s' || echo 'No common tracked ports listening.'
+echo
+printf 'Result: %s\n' "OK"

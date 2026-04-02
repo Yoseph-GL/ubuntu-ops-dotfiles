@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: backup-configs [--run] [--dest DIR] [--name NAME]
+
+Back up key local configuration files and Ops scripts into a timestamped folder.
+Default behavior is dry-run.
+
+Options:
+  --run        Execute backup.
+  --dest DIR   Base destination directory.
+               Default: $HOME/Backups/Snapshots/Config_Dumps
+  --name NAME  Backup folder name.
+               Default: config-backup-YYYY-MM-DD_HHMMSS
+  -h, --help   Show this help.
+USAGE
+}
+
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+log_warn() { printf '[WARN] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+MODE="dry-run"
+DEST_BASE="$HOME/Backups/Snapshots/Config_Dumps"
+BACKUP_NAME="config-backup-$(date +%F_%H%M%S)"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run)
+      MODE="run"
+      shift
+      ;;
+    --dest)
+      DEST_BASE="${2:?Missing value for --dest}"
+      shift 2
+      ;;
+    --name)
+      BACKUP_NAME="${2:?Missing value for --name}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+DEST_DIR="$DEST_BASE/$BACKUP_NAME"
+FILES_DIR="$DEST_DIR/files"
+
+CONFIG_FILES=(
+  "$HOME/.zshrc"
+  "$HOME/.config/alacritty/alacritty.toml"
+  "$HOME/.config/fastfetch/config.jsonc"
+)
+
+echo "=== BACKUP CONFIGS ==="
+echo "Mode: $MODE"
+echo "Destination: $DEST_DIR"
+echo
+echo "Will include files:"
+for f in "${CONFIG_FILES[@]}"; do
+  echo "  - $f"
+done
+echo "Will include directory:"
+echo "  - $HOME/Workspace/ops/scripts"
+
+if [[ "$MODE" != "run" ]]; then
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+  exit 0
+fi
+
+require_cmd rsync
+require_cmd sha256sum
+
+mkdir -p "$FILES_DIR"
+
+for f in "${CONFIG_FILES[@]}"; do
+  if [[ -f "$f" ]]; then
+    rel_path="${f#"$HOME"/}"
+    target="$FILES_DIR/$rel_path"
+    mkdir -p "$(dirname "$target")"
+    cp -a "$f" "$target"
+  else
+    log_warn "Missing file, skipped: $f"
+  fi
+done
+
+if [[ -d "$HOME/Workspace/ops/scripts" ]]; then
+  cp -a "$HOME/Workspace/ops/scripts" "$DEST_DIR/ops-scripts"
+else
+  log_warn "Missing directory, skipped: $HOME/Workspace/ops/scripts"
+fi
+
+(
+  cd "$DEST_DIR"
+  find . -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z | xargs -0 --no-run-if-empty sha256sum > SHA256SUMS.txt
+)
+
+cat > "$DEST_DIR/README.txt" <<INFO
+Backup Created: $(date '+%F %T %Z')
+Host: $(hostname)
+Path: $DEST_DIR
+
+Contents:
+- files/: selected config files preserving relative path from HOME
+- ops-scripts/: snapshot of Ops scripts directory
+- SHA256SUMS.txt: integrity hashes of all files in this backup
+INFO
+
+echo
+echo "Backup completed: $DEST_DIR"

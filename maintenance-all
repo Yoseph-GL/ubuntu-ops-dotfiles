@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/${SCRIPT_NAME}.lock"
+
+usage() {
+  cat <<'USAGE'
+Usage: maintenance-all [--run] [--days N] [--backup-dir DIR]
+
+One-command maintenance wrapper:
+1) update-all
+2) disk-clean-safe --deep-system-clean
+
+Default behavior is dry-run.
+
+Options:
+  --run             Execute both steps.
+  --days N          Age threshold for disk-clean-safe (default: 14).
+  --backup-dir DIR  Backup dir forwarded to update-all.
+                    Default: $HOME/Backups/Snapshots/Config_Dumps
+  -h, --help        Show this help.
+USAGE
+}
+
+log_info() { printf '[INFO] %s\n' "$*"; }
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+require_executable_file() {
+  local file="$1"
+  [[ -f "$file" ]] || die "Required file not found: $file"
+  [[ -x "$file" ]] || die "Required file is not executable: $file"
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+MODE="dry-run"
+DAYS=14
+BACKUP_DIR="$HOME/Backups/Snapshots/Config_Dumps"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+UPDATE_CMD="$SCRIPT_DIR/update-all"
+CLEAN_CMD="$SCRIPT_DIR/disk-clean-safe"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run)
+      MODE="run"
+      shift
+      ;;
+    --days)
+      DAYS="${2:?Missing value for --days}"
+      if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+        die "--days must be a non-negative integer"
+      fi
+      shift 2
+      ;;
+    --backup-dir)
+      BACKUP_DIR="${2:?Missing value for --backup-dir}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+require_executable_file "$UPDATE_CMD"
+require_executable_file "$CLEAN_CMD"
+
+echo "=== MAINTENANCE ALL ==="
+echo "Mode: $MODE"
+echo "Days: $DAYS"
+echo "Backup dir: $BACKUP_DIR"
+echo
+echo "Step 1: update-all"
+echo "Step 2: disk-clean-safe --deep-system-clean"
+echo
+
+if [[ "$MODE" != "run" ]]; then
+  "$UPDATE_CMD" --backup-dir "$BACKUP_DIR"
+  echo
+  "$CLEAN_CMD" --days "$DAYS" --deep-system-clean
+  echo
+  echo "Dry-run completed. Re-run with --run to execute all steps."
+  exit 0
+fi
+
+require_cmd flock
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  die "Another $SCRIPT_NAME process is already running."
+fi
+
+log_info "Running update-all"
+"$UPDATE_CMD" --run --backup-dir "$BACKUP_DIR"
+echo
+log_info "Running disk-clean-safe"
+"$CLEAN_CMD" --run --days "$DAYS" --deep-system-clean
+echo
+echo "Maintenance completed."

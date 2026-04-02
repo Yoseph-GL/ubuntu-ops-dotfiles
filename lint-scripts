@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "=== LINT SCRIPTS ==="
+echo "Running bash -n on shell scripts..."
+
+status=0
+for f in "$SCRIPT_DIR"/*; do
+  [ -f "$f" ] || continue
+  if head -n1 "$f" | grep -q '^#!/usr/bin/env bash'; then
+    if ! bash -n "$f"; then
+      echo "[ERROR] Syntax check failed: $f" >&2
+      status=1
+    fi
+  fi
+done
+
+if command -v shellcheck >/dev/null 2>&1; then
+  echo
+  echo "Running shellcheck..."
+  shellcheck -S style "$SCRIPT_DIR"/* || status=1
+else
+  echo
+  echo "shellcheck not installed; skipping shellcheck pass."
+fi
+
+if [ "$status" -eq 0 ]; then
+  echo
+  echo "Lint checks passed."
+else
+  echo
+  echo "Lint checks found issues." >&2
+fi
+
+exit "$status"

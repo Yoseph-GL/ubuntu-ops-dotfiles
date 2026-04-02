@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: restore-skeleton --from SNAPSHOT_DIR [--to TARGET_DIR] [--run]
+
+Recreate directory structure from a skeleton snapshot (directories only).
+No files are copied.
+
+Options:
+  --from DIR   Source skeleton snapshot directory (required)
+  --to DIR     Target directory to recreate structure.
+               Default: $HOME
+  --run        Execute restore.
+               Default behavior is dry-run.
+  -h, --help   Show this help.
+USAGE
+}
+
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+FROM_DIR=""
+TO_DIR="$HOME"
+MODE="dry-run"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --from)
+      FROM_DIR="${2:?Missing value for --from}"
+      shift 2
+      ;;
+    --to)
+      TO_DIR="${2:?Missing value for --to}"
+      shift 2
+      ;;
+    --run)
+      MODE="run"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+if [[ -z "$FROM_DIR" ]]; then
+  die "--from is required"
+fi
+if [[ ! -d "$FROM_DIR" ]]; then
+  die "Snapshot directory not found: $FROM_DIR"
+fi
+
+echo "Mode: $MODE"
+echo "From: $FROM_DIR"
+echo "To:   $TO_DIR"
+echo
+echo "Would run:"
+echo "  rsync -a -f'+ */' -f'- *' \"$FROM_DIR/\" \"$TO_DIR/\""
+
+if [[ "$MODE" != "run" ]]; then
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+  exit 0
+fi
+
+require_cmd rsync
+
+mkdir -p "$TO_DIR"
+rsync -a -f'+ */' -f'- *' "$FROM_DIR/" "$TO_DIR/"
+echo "Skeleton restored from '$FROM_DIR' to '$TO_DIR'"

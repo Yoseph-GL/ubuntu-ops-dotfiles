@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: net-debug [--host HOST] [--run]
+
+Quick network diagnostics:
+- Interface IPs
+- Default route / gateway
+- DNS resolvers
+- Ping to gateway and internet
+- Optional host connectivity test
+
+Default behavior is dry-run summary.
+Use --run to execute diagnostics.
+USAGE
+}
+
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+match_cmd() {
+  if command -v rg >/dev/null 2>&1; then
+    rg "$@"
+  else
+    grep -E "$@"
+  fi
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+HOST="1.1.1.1"
+MODE="dry-run"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host)
+      HOST="${2:?Missing value for --host}"
+      shift 2
+      ;;
+    --run)
+      MODE="run"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+echo "=== NET DEBUG ==="
+echo "Mode: $MODE"
+echo
+echo "Would run sections:"
+echo "  [IP ADDRESSES] [DEFAULT ROUTE] [DNS] [PING GATEWAY] [PING INTERNET] [PING HOST] [PORTS]"
+echo "Host target: $HOST"
+if [[ "$MODE" != "run" ]]; then
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+  exit 0
+fi
+echo
+
+echo "[IP ADDRESSES]"
+ip -brief address | sed -n '1,20p'
+echo
+
+echo "[DEFAULT ROUTE]"
+ip route | match_cmd '^default' || echo 'No default route found.'
+GW="$(ip route | awk '/^default/ {print $3; exit}')"
+echo
+
+echo "[DNS]"
+if [[ -f /etc/resolv.conf ]]; then
+  match_cmd '^nameserver[[:space:]]+' /etc/resolv.conf || true
+fi
+echo
+
+if [[ -n "${GW:-}" ]]; then
+  echo "[PING GATEWAY: $GW]"
+  ping -c 2 -W 2 "$GW" || true
+  echo
+fi
+
+echo "[PING INTERNET: 1.1.1.1]"
+ping -c 2 -W 2 1.1.1.1 || true
+echo
+
+echo "[PING HOST: $HOST]"
+ping -c 2 -W 2 "$HOST" || true
+echo
+
+echo "[PORTS LISTENING SNAPSHOT]"
+ss -lntp 2>/dev/null | sed -n '1,20p'

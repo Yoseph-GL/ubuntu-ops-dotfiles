@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: backup-skeleton [--run] [--dest DIR] [--name NAME]
+
+Create a lightweight snapshot of HOME directory structure (directories only).
+No files are copied.
+
+Options:
+  --run        Execute snapshot creation.
+               Default behavior is dry-run.
+  --dest DIR   Base destination directory.
+               Default: $HOME/Backups/Snapshots
+  --name NAME  Snapshot folder name.
+               Default: home-skeleton-YYYY-MM-DD_HHMMSS
+  -h, --help   Show this help.
+USAGE
+}
+
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+DEST_BASE="$HOME/Backups/Snapshots"
+SNAP_NAME="home-skeleton-$(date +%F_%H%M%S)"
+MODE="dry-run"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dest)
+      DEST_BASE="${2:?Missing value for --dest}"
+      shift 2
+      ;;
+    --run)
+      MODE="run"
+      shift
+      ;;
+    --name)
+      SNAP_NAME="${2:?Missing value for --name}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+DEST_DIR="$DEST_BASE/$SNAP_NAME"
+
+echo "Mode: $MODE"
+echo "Source: $HOME/"
+echo "Destination: $DEST_DIR"
+echo
+echo "Would run:"
+echo "  rsync -a -f'+ */' -f'- *' [excludes...] \"$HOME/\" \"$DEST_DIR/\""
+
+if [[ "$MODE" != "run" ]]; then
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+  exit 0
+fi
+
+require_cmd rsync
+
+mkdir -p "$DEST_DIR"
+
+rsync -a \
+  -f'+ */' -f'- *' \
+  --exclude='Backups/Snapshots/***' \
+  --exclude='.cache/***' \
+  --exclude='.local/share/Trash/***' \
+  --exclude='.npm/***' \
+  --exclude='.gradle/***' \
+  "$HOME/" "$DEST_DIR/"
+
+echo "Skeleton snapshot created: $DEST_DIR"

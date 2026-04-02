@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  install-direnv-just-k6 --run
+
+What it does:
+  - Adds k6 official apt repository keyring/source
+  - Installs: direnv, just, k6
+  - Uses --no-install-recommends for minimal footprint
+USAGE
+}
+
+log_info() { printf '[INFO] %s\n' "$*"; }
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+if [[ "${1:-}" != "--run" ]]; then
+  usage
+  exit 0
+fi
+
+require_cmd sudo
+require_cmd curl
+require_cmd gpg
+
+if ! sudo -v; then
+  die "sudo authentication failed."
+fi
+
+sudo install -d -m 0755 /etc/apt/keyrings
+
+if [[ ! -f /etc/apt/keyrings/k6.gpg ]]; then
+  log_info "Adding k6 apt keyring"
+  curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/k6.gpg
+  sudo chmod 0644 /etc/apt/keyrings/k6.gpg
+fi
+
+log_info "Configuring k6 apt source"
+echo "deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main" \
+  | sudo tee /etc/apt/sources.list.d/k6.list >/dev/null
+
+log_info "Installing packages"
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends direnv just k6
+
+echo
+echo "Installed versions:"
+direnv version
+just --version
+k6 version | head -n 1

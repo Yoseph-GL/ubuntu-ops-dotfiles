@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: disk-clean-safe [--run] [--days N] [--deep-system-clean]
+
+Safe disk cleanup for user-space reclaimable files.
+Default mode is dry-run (preview only).
+
+What it targets:
+- Trash files in ~/.local/share/Trash/files
+- Thumbnail cache in ~/.cache/thumbnails
+- Old user temp files in /tmp older than N days
+- Old cache files in ~/.cache older than N days (excluding critical app state dirs)
+
+Options:
+  --run               Execute cleanup.
+  --days N            Age threshold in days for old temp/cache files.
+                      Default: 14
+  --deep-system-clean Include optional system cleanup:
+                      - apt autoremove/autoclean/clean
+                      - snap old revisions removal
+                      - flatpak unused runtimes removal
+                      - journal vacuum (14d)
+  -h, --help          Show this help.
+USAGE
+}
+
+log_info() { printf '[INFO] %s\n' "$*"; }
+log_warn() { printf '[WARN] %s\n' "$*" >&2; }
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+MODE="dry-run"
+DAYS=14
+DEEP_SYSTEM_CLEAN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run)
+      MODE="run"
+      shift
+      ;;
+    --days)
+      DAYS="${2:?Missing value for --days}"
+      if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+        die "--days must be a non-negative integer"
+      fi
+      shift 2
+      ;;
+    --deep-system-clean)
+      DEEP_SYSTEM_CLEAN=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+require_cmd find
+require_cmd df
+
+TRASH_DIR="$HOME/.local/share/Trash/files"
+THUMBS_DIR="$HOME/.cache/thumbnails"
+CACHE_DIR="$HOME/.cache"
+
+KEEP_CACHE_PATTERNS=(
+  "$CACHE_DIR/google-chrome"
+  "$CACHE_DIR/mozilla"
+  "$CACHE_DIR/JetBrains"
+  "$CACHE_DIR/pip"
+  "$CACHE_DIR/nvim"
+)
+
+is_protected_cache_path() {
+  local path="$1"
+  local keep
+  for keep in "${KEEP_CACHE_PATTERNS[@]}"; do
+    if [[ "$path" == "$keep" || "$path" == "$keep"/* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+echo "=== DISK CLEAN SAFE ==="
+echo "Mode: $MODE"
+echo "Age threshold: $DAYS days"
+echo "Deep system clean: $DEEP_SYSTEM_CLEAN"
+echo
+echo "[BEFORE]"
+df -h / | sed -n '1,2p'
+echo
+echo "Targets:"
+echo "  - $TRASH_DIR"
+echo "  - $THUMBS_DIR"
+echo "  - /tmp (user-owned files older than $DAYS days)"
+echo "  - $CACHE_DIR (files older than $DAYS days, with protected subdirs)"
+if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
+  echo "  - System cleanup (apt/snap/flatpak/journal)"
+fi
+
+tmp_count=0
+cache_count=0
+trash_size="not present"
+thumbs_size="not present"
+
+if [[ -d "$TRASH_DIR" ]]; then
+  trash_size="$(du -sh "$TRASH_DIR" | awk '{print $1}')"
+fi
+if [[ -d "$THUMBS_DIR" ]]; then
+  thumbs_size="$(du -sh "$THUMBS_DIR" | awk '{print $1}')"
+fi
+
+while IFS= read -r _; do
+  ((tmp_count += 1))
+done < <(find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f 2>/dev/null)
+
+if [[ -d "$CACHE_DIR" ]]; then
+  while IFS= read -r -d '' file; do
+    if ! is_protected_cache_path "$file"; then
+      ((cache_count += 1))
+    fi
+  done < <(find "$CACHE_DIR" -xdev -mtime +"$DAYS" -type f -print0 2>/dev/null)
+fi
+
+if [[ "$MODE" != "run" ]]; then
+  echo
+  echo "[DRY RUN] Estimated candidates:"
+  echo "  Trash size: $trash_size"
+  echo "  Thumbnails size: $thumbs_size"
+  echo "  /tmp old files: $tmp_count"
+  echo "  ~/.cache old files (after protected filter): $cache_count"
+  if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
+    echo "  [deep-system-clean planned]"
+    echo "    - sudo apt-get autoremove -y"
+    echo "    - sudo apt-get autoclean -y"
+    echo "    - sudo apt-get clean"
+    echo "    - snap: remove disabled revisions"
+    echo "    - flatpak uninstall --unused -y"
+    echo "    - sudo journalctl --vacuum-time=14d"
+  fi
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+  exit 0
+fi
+
+if [[ -d "$TRASH_DIR" ]]; then
+  find "$TRASH_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+fi
+
+if [[ -d "$THUMBS_DIR" ]]; then
+  find "$THUMBS_DIR" -mindepth 1 -maxdepth 3 -type f -delete
+fi
+
+find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f -delete 2>/dev/null || true
+find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type d -empty -delete 2>/dev/null || true
+
+if [[ -d "$CACHE_DIR" ]]; then
+  while IFS= read -r -d '' file; do
+    if ! is_protected_cache_path "$file"; then
+      rm -f "$file"
+    fi
+  done < <(find "$CACHE_DIR" -xdev -mtime +"$DAYS" -type f -print0 2>/dev/null)
+
+  while IFS= read -r -d '' d; do
+    if ! is_protected_cache_path "$d"; then
+      rmdir "$d" 2>/dev/null || true
+    fi
+  done < <(find "$CACHE_DIR" -depth -type d -empty -print0 2>/dev/null)
+fi
+
+if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
+  require_cmd sudo
+  if ! sudo -v; then
+    die "sudo authentication failed."
+  fi
+
+  echo
+  echo "[SYSTEM CLEANUP]"
+  sudo apt-get autoremove -y
+  sudo apt-get autoclean -y
+  sudo apt-get clean
+
+  if command -v snap >/dev/null 2>&1; then
+    while IFS= read -r line; do
+      name="$(echo "$line" | awk '{print $1}')"
+      rev="$(echo "$line" | awk '{print $3}')"
+      if [[ -n "$name" && -n "$rev" ]]; then
+        sudo snap remove "$name" --revision="$rev" || true
+      fi
+    done < <(snap list --all 2>/dev/null | awk '/disabled/{print}')
+  fi
+
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak uninstall --unused -y || true
+  fi
+
+  sudo journalctl --vacuum-time=14d || true
+fi
+
+echo
+echo "[AFTER]"
+df -h / | sed -n '1,2p'
+echo "Done."
