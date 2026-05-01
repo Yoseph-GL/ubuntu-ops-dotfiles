@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 SCRIPT_NAME="$(basename "$0")"
 LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/${SCRIPT_NAME}.lock"
+
+SNAPSHOTS_DIR="$HOME/Backups/Snapshots"
+CONFIG_DUMPS_DIR="$SNAPSHOTS_DIR/Config_Dumps"
+
+MODE="dry-run"
+DAYS=14
+BACKUP_DIR="$CONFIG_DUMPS_DIR"
+UPDATE_CMD="$SCRIPT_DIR/update-all"
+CLEAN_CMD="$SCRIPT_DIR/disk-clean-safe"
 
 usage() {
   cat <<'USAGE'
@@ -18,6 +28,9 @@ Options:
   --run             Execute both steps.
   --days N          Age threshold for disk-clean-safe (default: 14).
   --backup-dir DIR  Backup dir forwarded to update-all.
+                    Allowed values:
+                    - $HOME/Backups/Snapshots
+                    - $HOME/Backups/Snapshots/Config_Dumps
                     Default: $HOME/Backups/Snapshots/Config_Dumps
   -h, --help        Show this help.
 USAGE
@@ -38,73 +51,106 @@ require_executable_file() {
   [[ -x "$file" ]] || die "Required file is not executable: $file"
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
-MODE="dry-run"
-DAYS=14
-BACKUP_DIR="$HOME/Backups/Snapshots/Config_Dumps"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UPDATE_CMD="$SCRIPT_DIR/update-all"
-CLEAN_CMD="$SCRIPT_DIR/disk-clean-safe"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --run)
-      MODE="run"
-      shift
-      ;;
-    --days)
-      DAYS="${2:?Missing value for --days}"
-      if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
-        die "--days must be a non-negative integer"
-      fi
-      shift 2
-      ;;
-    --backup-dir)
-      BACKUP_DIR="${2:?Missing value for --backup-dir}"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
+validate_backup_dir() {
+  local dir="${1%/}"
+  case "$dir" in
+    "$SNAPSHOTS_DIR"|"$CONFIG_DUMPS_DIR") ;;
     *)
-      die "Unknown argument: $1"
+      die "Invalid --backup-dir: $1. Use $SNAPSHOTS_DIR or $CONFIG_DUMPS_DIR."
       ;;
   esac
-done
+}
 
-require_executable_file "$UPDATE_CMD"
-require_executable_file "$CLEAN_CMD"
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --run)
+        MODE="run"
+        shift
+        ;;
+      --days)
+        DAYS="${2:?Missing value for --days}"
+        [[ "$DAYS" =~ ^[0-9]+$ ]] || die "--days must be a non-negative integer"
+        shift 2
+        ;;
+      --backup-dir)
+        BACKUP_DIR="${2:?Missing value for --backup-dir}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-echo "=== MAINTENANCE ALL ==="
-echo "Mode: $MODE"
-echo "Days: $DAYS"
-echo "Backup dir: $BACKUP_DIR"
-echo
-echo "Step 1: update-all"
-echo "Step 2: disk-clean-safe --deep-system-clean"
-echo
+check_dependencies() {
+  require_executable_file "$UPDATE_CMD"
+  require_executable_file "$CLEAN_CMD"
+}
 
-if [[ "$MODE" != "run" ]]; then
+print_plan() {
+  echo "=== MAINTENANCE ALL ==="
+  echo "Mode: $MODE"
+  echo "Script path: $SCRIPT_DIR"
+  echo "Days: $DAYS"
+  echo "Backup dir: $BACKUP_DIR"
+  echo
+  echo "Step 1: update-all"
+  echo "Step 2: disk-clean-safe --deep-system-clean"
+  echo
+}
+
+execute_dry_run() {
+  print_plan
   "$UPDATE_CMD" --backup-dir "$BACKUP_DIR"
   echo
   "$CLEAN_CMD" --days "$DAYS" --deep-system-clean
   echo
   echo "Dry-run completed. Re-run with --run to execute all steps."
-  exit 0
-fi
+}
 
-require_cmd flock
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  die "Another $SCRIPT_NAME process is already running."
-fi
+execute_real() {
+  print_plan
+  require_cmd flock
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    die "Another $SCRIPT_NAME process is already running."
+  fi
 
-log_info "Running update-all"
-"$UPDATE_CMD" --run --backup-dir "$BACKUP_DIR"
-echo
-log_info "Running disk-clean-safe"
-"$CLEAN_CMD" --run --days "$DAYS" --deep-system-clean
-echo
-echo "Maintenance completed."
+  log_info "Running update-all"
+  "$UPDATE_CMD" --run --backup-dir "$BACKUP_DIR"
+  echo
+  log_info "Running disk-clean-safe"
+  "$CLEAN_CMD" --run --days "$DAYS" --deep-system-clean
+  echo
+  echo "Maintenance completed."
+}
+
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  validate_backup_dir "$BACKUP_DIR"
+  mkdir -p "$BACKUP_DIR"
+  check_dependencies
+
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

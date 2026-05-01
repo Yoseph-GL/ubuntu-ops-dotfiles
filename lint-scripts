@@ -1,37 +1,130 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+MODE="dry-run"
 
-echo "=== LINT SCRIPTS ==="
-echo "Running bash -n on shell scripts..."
+usage() {
+  cat <<'USAGE'
+Usage: lint-scripts [--run]
 
-status=0
-for f in "$SCRIPT_DIR"/*; do
-  [ -f "$f" ] || continue
-  if head -n1 "$f" | grep -q '^#!/usr/bin/env bash'; then
-    if ! bash -n "$f"; then
-      echo "[ERROR] Syntax check failed: $f" >&2
+Lint all Bash scripts in this directory.
+Default mode is dry-run. Use --run to execute checks.
+USAGE
+}
+
+log_err() { printf '[ERROR] %s\n' "$*" >&2; }
+die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --run)
+        MODE="run"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
+
+check_dependencies() {
+  require_cmd bash
+  require_cmd head
+  require_cmd grep
+}
+
+list_bash_scripts() {
+  local file
+  for file in "$SCRIPT_DIR"/*; do
+    [[ -f "$file" ]] || continue
+    if head -n1 "$file" | grep -q '^#!/usr/bin/env bash'; then
+      printf '%s\n' "$file"
+    fi
+  done
+}
+
+execute_dry_run() {
+  echo "=== LINT SCRIPTS ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo
+  echo "Would run bash -n for:"
+  list_bash_scripts | sed 's|^|  - |'
+  if command -v shellcheck >/dev/null 2>&1; then
+    echo "Would also run: shellcheck -S style <scripts>"
+  else
+    echo "shellcheck not installed; shellcheck pass would be skipped."
+  fi
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+}
+
+execute_real() {
+  local status=0
+  local file
+
+  check_dependencies
+
+  echo "=== LINT SCRIPTS ==="
+  echo "Running bash -n on shell scripts..."
+  while IFS= read -r file; do
+    if ! bash -n "$file"; then
+      echo "[ERROR] Syntax check failed: $file" >&2
       status=1
     fi
+  done < <(list_bash_scripts)
+
+  if command -v shellcheck >/dev/null 2>&1; then
+    echo
+    echo "Running shellcheck..."
+    while IFS= read -r file; do
+      if ! shellcheck -S style "$file"; then
+        status=1
+      fi
+    done < <(list_bash_scripts)
+  else
+    echo
+    echo "shellcheck not installed; skipping shellcheck pass."
   fi
-done
 
-if command -v shellcheck >/dev/null 2>&1; then
-  echo
-  echo "Running shellcheck..."
-  shellcheck -S style "$SCRIPT_DIR"/* || status=1
-else
-  echo
-  echo "shellcheck not installed; skipping shellcheck pass."
-fi
+  if [[ "$status" -eq 0 ]]; then
+    echo
+    echo "Lint checks passed."
+  else
+    echo
+    echo "Lint checks found issues." >&2
+  fi
 
-if [ "$status" -eq 0 ]; then
-  echo
-  echo "Lint checks passed."
-else
-  echo
-  echo "Lint checks found issues." >&2
-fi
+  exit "$status"
+}
 
-exit "$status"
+main() {
+  parse_args "$@"
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+MODE="dry-run"
+DAYS=14
+DEEP_SYSTEM_CLEAN=0
+
+TRASH_DIR="$HOME/.local/share/Trash/files"
+THUMBS_DIR="$HOME/.cache/thumbnails"
+CACHE_DIR="$HOME/.cache"
+
+KEEP_CACHE_PATTERNS=(
+  "$CACHE_DIR/google-chrome"
+  "$CACHE_DIR/mozilla"
+  "$CACHE_DIR/JetBrains"
+  "$CACHE_DIR/pip"
+  "$CACHE_DIR/nvim"
+)
+
 usage() {
   cat <<'USAGE'
 Usage: disk-clean-safe [--run] [--days N] [--deep-system-clean]
@@ -37,53 +55,12 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
-
-MODE="dry-run"
-DAYS=14
-DEEP_SYSTEM_CLEAN=0
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --run)
-      MODE="run"
-      shift
-      ;;
-    --days)
-      DAYS="${2:?Missing value for --days}"
-      if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
-        die "--days must be a non-negative integer"
-      fi
-      shift 2
-      ;;
-    --deep-system-clean)
-      DEEP_SYSTEM_CLEAN=1
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      die "Unknown argument: $1"
-      ;;
-  esac
-done
-
-require_cmd find
-require_cmd df
-
-TRASH_DIR="$HOME/.local/share/Trash/files"
-THUMBS_DIR="$HOME/.cache/thumbnails"
-CACHE_DIR="$HOME/.cache"
-
-KEEP_CACHE_PATTERNS=(
-  "$CACHE_DIR/google-chrome"
-  "$CACHE_DIR/mozilla"
-  "$CACHE_DIR/JetBrains"
-  "$CACHE_DIR/pip"
-  "$CACHE_DIR/nvim"
-)
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
 is_protected_cache_path() {
   local path="$1"
@@ -96,48 +73,102 @@ is_protected_cache_path() {
   return 1
 }
 
-echo "=== DISK CLEAN SAFE ==="
-echo "Mode: $MODE"
-echo "Age threshold: $DAYS days"
-echo "Deep system clean: $DEEP_SYSTEM_CLEAN"
-echo
-echo "[BEFORE]"
-df -h / | sed -n '1,2p'
-echo
-echo "Targets:"
-echo "  - $TRASH_DIR"
-echo "  - $THUMBS_DIR"
-echo "  - /tmp (user-owned files older than $DAYS days)"
-echo "  - $CACHE_DIR (files older than $DAYS days, with protected subdirs)"
-if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
-  echo "  - System cleanup (apt/snap/flatpak/journal)"
-fi
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --run)
+        MODE="run"
+        shift
+        ;;
+      --days)
+        DAYS="${2:?Missing value for --days}"
+        [[ "$DAYS" =~ ^[0-9]+$ ]] || die "--days must be a non-negative integer"
+        shift 2
+        ;;
+      --deep-system-clean)
+        DEEP_SYSTEM_CLEAN=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-tmp_count=0
-cache_count=0
-trash_size="not present"
-thumbs_size="not present"
+check_dependencies() {
+  require_cmd find
+  require_cmd df
+  require_cmd du
+  require_cmd awk
+  require_cmd sed
+}
 
-if [[ -d "$TRASH_DIR" ]]; then
-  trash_size="$(du -sh "$TRASH_DIR" | awk '{print $1}')"
-fi
-if [[ -d "$THUMBS_DIR" ]]; then
-  thumbs_size="$(du -sh "$THUMBS_DIR" | awk '{print $1}')"
-fi
+check_deep_dependencies() {
+  require_cmd sudo
+  require_cmd apt-get
+  require_cmd journalctl
+}
 
-while IFS= read -r _; do
-  ((tmp_count += 1))
-done < <(find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f 2>/dev/null)
+collect_counts() {
+  local tmp_count=0
+  local cache_count=0
+  local trash_size_value="not present"
+  local thumbs_size_value="not present"
+  local file d
 
-if [[ -d "$CACHE_DIR" ]]; then
-  while IFS= read -r -d '' file; do
-    if ! is_protected_cache_path "$file"; then
-      ((cache_count += 1))
-    fi
-  done < <(find "$CACHE_DIR" -xdev -mtime +"$DAYS" -type f -print0 2>/dev/null)
-fi
+  if [[ -d "$TRASH_DIR" ]]; then
+    trash_size_value="$(du -sh "$TRASH_DIR" | awk '{print $1}')"
+  fi
+  if [[ -d "$THUMBS_DIR" ]]; then
+    thumbs_size_value="$(du -sh "$THUMBS_DIR" | awk '{print $1}')"
+  fi
 
-if [[ "$MODE" != "run" ]]; then
+  while IFS= read -r file; do
+    [[ -n "$file" ]] && tmp_count=$((tmp_count + 1))
+  done < <(find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f 2>/dev/null)
+
+  if [[ -d "$CACHE_DIR" ]]; then
+    while IFS= read -r -d '' d; do
+      if ! is_protected_cache_path "$d"; then
+        cache_count=$((cache_count + 1))
+      fi
+    done < <(find "$CACHE_DIR" -xdev -mtime +"$DAYS" -type f -print0 2>/dev/null)
+  fi
+
+  printf '%s\t%s\t%s\t%s\n' "$tmp_count" "$cache_count" "$trash_size_value" "$thumbs_size_value"
+}
+
+print_header() {
+  echo "=== DISK CLEAN SAFE ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo "Age threshold: $DAYS days"
+  echo "Deep system clean: $DEEP_SYSTEM_CLEAN"
+  echo
+  echo "[BEFORE]"
+  df -h / | sed -n '1,2p'
+  echo
+  echo "Targets:"
+  echo "  - $TRASH_DIR"
+  echo "  - $THUMBS_DIR"
+  echo "  - /tmp (user-owned files older than $DAYS days)"
+  echo "  - $CACHE_DIR (files older than $DAYS days, with protected subdirs)"
+  if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
+    echo "  - System cleanup (apt/snap/flatpak/journal)"
+  fi
+}
+
+execute_dry_run() {
+  local tmp_count cache_count trash_size thumbs_size
+  read -r tmp_count cache_count trash_size thumbs_size < <(collect_counts)
+
+  print_header
   echo
   echo "[DRY RUN] Estimated candidates:"
   echo "  Trash size: $trash_size"
@@ -155,39 +186,11 @@ if [[ "$MODE" != "run" ]]; then
   fi
   echo
   echo "Dry-run only. Re-run with --run to execute."
-  exit 0
-fi
+}
 
-if [[ -d "$TRASH_DIR" ]]; then
-  find "$TRASH_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-fi
-
-if [[ -d "$THUMBS_DIR" ]]; then
-  find "$THUMBS_DIR" -mindepth 1 -maxdepth 3 -type f -delete
-fi
-
-find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f -delete 2>/dev/null || true
-find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type d -empty -delete 2>/dev/null || true
-
-if [[ -d "$CACHE_DIR" ]]; then
-  while IFS= read -r -d '' file; do
-    if ! is_protected_cache_path "$file"; then
-      rm -f "$file"
-    fi
-  done < <(find "$CACHE_DIR" -xdev -mtime +"$DAYS" -type f -print0 2>/dev/null)
-
-  while IFS= read -r -d '' d; do
-    if ! is_protected_cache_path "$d"; then
-      rmdir "$d" 2>/dev/null || true
-    fi
-  done < <(find "$CACHE_DIR" -depth -type d -empty -print0 2>/dev/null)
-fi
-
-if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
-  require_cmd sudo
-  if ! sudo -v; then
-    die "sudo authentication failed."
-  fi
+run_deep_cleanup() {
+  check_deep_dependencies
+  sudo -v || die "sudo authentication failed."
 
   echo
   echo "[SYSTEM CLEANUP]"
@@ -196,23 +199,75 @@ if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
   sudo apt-get clean
 
   if command -v snap >/dev/null 2>&1; then
+    local name rev
     while IFS= read -r line; do
-      name="$(echo "$line" | awk '{print $1}')"
-      rev="$(echo "$line" | awk '{print $3}')"
+      name="$(awk '{print $1}' <<<"$line")"
+      rev="$(awk '{print $3}' <<<"$line")"
       if [[ -n "$name" && -n "$rev" ]]; then
-        sudo snap remove "$name" --revision="$rev" || true
+        if ! sudo snap remove "$name" --revision="$rev"; then
+          log_warn "Could not remove disabled snap revision $name/$rev"
+        fi
       fi
     done < <(snap list --all 2>/dev/null | awk '/disabled/{print}')
   fi
 
   if command -v flatpak >/dev/null 2>&1; then
-    flatpak uninstall --unused -y || true
+    if ! flatpak uninstall --unused -y; then
+      log_warn "flatpak uninstall --unused returned a non-zero status"
+    fi
   fi
 
-  sudo journalctl --vacuum-time=14d || true
-fi
+  sudo journalctl --vacuum-time=14d
+}
 
-echo
-echo "[AFTER]"
-df -h / | sed -n '1,2p'
-echo "Done."
+execute_real() {
+  check_dependencies
+  print_header
+
+  if [[ -d "$TRASH_DIR" ]]; then
+    find "$TRASH_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  fi
+
+  if [[ -d "$THUMBS_DIR" ]]; then
+    find "$THUMBS_DIR" -mindepth 1 -maxdepth 3 -type f -delete
+  fi
+
+  find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f -delete 2>/dev/null
+  find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type d -empty -delete 2>/dev/null
+
+  if [[ -d "$CACHE_DIR" ]]; then
+    local file d
+    while IFS= read -r -d '' file; do
+      if ! is_protected_cache_path "$file"; then
+        rm -f "$file"
+      fi
+    done < <(find "$CACHE_DIR" -xdev -mtime +"$DAYS" -type f -print0 2>/dev/null)
+
+    while IFS= read -r -d '' d; do
+      if ! is_protected_cache_path "$d"; then
+        rmdir "$d" 2>/dev/null || log_warn "Could not remove directory: $d"
+      fi
+    done < <(find "$CACHE_DIR" -depth -type d -empty -print0 2>/dev/null)
+  fi
+
+  if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
+    run_deep_cleanup
+  fi
+
+  echo
+  echo "[AFTER]"
+  df -h / | sed -n '1,2p'
+  log_info "Done."
+}
+
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

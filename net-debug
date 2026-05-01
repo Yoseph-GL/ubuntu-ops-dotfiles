@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+HOST="1.1.1.1"
+MODE="dry-run"
+
 usage() {
   cat <<'USAGE'
 Usage: net-debug [--host HOST] [--run]
@@ -20,6 +25,18 @@ USAGE
 log_err() { printf '[ERROR] %s\n' "$*" >&2; }
 die() { log_err "$*"; exit 1; }
 
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
+
 match_cmd() {
   if command -v rg >/dev/null 2>&1; then
     rg "$@"
@@ -28,71 +45,102 @@ match_cmd() {
   fi
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --host)
+        HOST="${2:?Missing value for --host}"
+        shift 2
+        ;;
+      --run)
+        MODE="run"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-HOST="1.1.1.1"
-MODE="dry-run"
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --host)
-      HOST="${2:?Missing value for --host}"
-      shift 2
-      ;;
-    --run)
-      MODE="run"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      die "Unknown argument: $1"
-      ;;
-  esac
-done
+check_dependencies() {
+  require_cmd ip
+  require_cmd awk
+  require_cmd ping
+  require_cmd ss
+  require_cmd sed
+}
 
-echo "=== NET DEBUG ==="
-echo "Mode: $MODE"
-echo
-echo "Would run sections:"
-echo "  [IP ADDRESSES] [DEFAULT ROUTE] [DNS] [PING GATEWAY] [PING INTERNET] [PING HOST] [PORTS]"
-echo "Host target: $HOST"
-if [[ "$MODE" != "run" ]]; then
+print_plan() {
+  echo "=== NET DEBUG ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo
+  echo "Would run sections:"
+  echo "  [IP ADDRESSES] [DEFAULT ROUTE] [DNS] [PING GATEWAY] [PING INTERNET] [PING HOST] [PORTS]"
+  echo "Host target: $HOST"
+}
+
+ping_target() {
+  local label="$1"
+  local target="$2"
+  echo "[$label: $target]"
+  if ! ping -c 2 -W 2 "$target"; then
+    echo "Ping failed for $target"
+  fi
+  echo
+}
+
+execute_dry_run() {
+  print_plan
   echo
   echo "Dry-run only. Re-run with --run to execute."
-  exit 0
-fi
-echo
+}
 
-echo "[IP ADDRESSES]"
-ip -brief address | sed -n '1,20p'
-echo
-
-echo "[DEFAULT ROUTE]"
-ip route | match_cmd '^default' || echo 'No default route found.'
-GW="$(ip route | awk '/^default/ {print $3; exit}')"
-echo
-
-echo "[DNS]"
-if [[ -f /etc/resolv.conf ]]; then
-  match_cmd '^nameserver[[:space:]]+' /etc/resolv.conf || true
-fi
-echo
-
-if [[ -n "${GW:-}" ]]; then
-  echo "[PING GATEWAY: $GW]"
-  ping -c 2 -W 2 "$GW" || true
+execute_real() {
+  check_dependencies
+  print_plan
   echo
-fi
 
-echo "[PING INTERNET: 1.1.1.1]"
-ping -c 2 -W 2 1.1.1.1 || true
-echo
+  echo "[IP ADDRESSES]"
+  ip -brief address | sed -n '1,20p'
+  echo
 
-echo "[PING HOST: $HOST]"
-ping -c 2 -W 2 "$HOST" || true
-echo
+  echo "[DEFAULT ROUTE]"
+  ip route | match_cmd '^default' || echo 'No default route found.'
+  local gw
+  gw="$(ip route | awk '/^default/ {print $3; exit}')"
+  echo
 
-echo "[PORTS LISTENING SNAPSHOT]"
-ss -lntp 2>/dev/null | sed -n '1,20p'
+  echo "[DNS]"
+  if [[ -f /etc/resolv.conf ]]; then
+    match_cmd '^nameserver[[:space:]]+' /etc/resolv.conf || echo 'No nameserver entry found.'
+  fi
+  echo
+
+  if [[ -n "$gw" ]]; then
+    ping_target "PING GATEWAY" "$gw"
+  fi
+  ping_target "PING INTERNET" "1.1.1.1"
+  ping_target "PING HOST" "$HOST"
+
+  echo "[PORTS LISTENING SNAPSHOT]"
+  ss -lntp 2>/dev/null | sed -n '1,20p'
+}
+
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

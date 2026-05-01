@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+MODE="dry-run"
+
 usage() {
   cat <<'USAGE'
 Usage: health-check [--run]
@@ -12,13 +16,25 @@ Quick host diagnostics:
 - Key services (ssh, fail2ban, docker)
 - Common listening ports
 
-Default behavior is dry-run summary (what sections would run).
+Default behavior is dry-run summary.
 Use --run to execute diagnostics.
 USAGE
 }
 
 log_err() { printf '[ERROR] %s\n' "$*" >&2; }
 die() { log_err "$*"; exit 1; }
+
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
 match_cmd() {
   if command -v rg >/dev/null 2>&1; then
@@ -28,65 +44,111 @@ match_cmd() {
   fi
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --run)
+        MODE="run"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-MODE="dry-run"
-if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
-  usage
-  exit 0
-elif [[ ${1:-} == "--run" ]]; then
-  MODE="run"
-elif [[ $# -gt 0 ]]; then
-  die "Unknown argument: $1"
-fi
+check_dependencies() {
+  require_cmd hostname
+  require_cmd date
+  require_cmd uptime
+  require_cmd awk
+  require_cmd free
+  require_cmd df
+  require_cmd ps
+  require_cmd systemctl
+  require_cmd ss
+  require_cmd sed
+}
 
-echo "=== HEALTH CHECK ==="
-echo "Mode: $MODE"
-echo
-echo "Would run sections:"
-echo "  [SYSTEM] [MEMORY] [DISK] [BATTERY] [TOP CPU] [SERVICES] [PORTS]"
+print_plan() {
+  echo "=== HEALTH CHECK ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo
+  echo "Would run sections:"
+  echo "  [SYSTEM] [MEMORY] [DISK] [BATTERY] [TOP CPU] [SERVICES] [PORTS]"
+}
 
-if [[ "$MODE" != "run" ]]; then
+execute_dry_run() {
+  print_plan
   echo
   echo "Dry-run only. Re-run with --run to execute."
-  exit 0
-fi
+}
 
-echo "[SYSTEM]"
-printf 'Host: %s\n' "$(hostname)"
-printf 'Time: %s\n' "$(date '+%F %T %Z')"
-printf 'Uptime: %s\n' "$(uptime -p 2>/dev/null || true)"
-printf 'Load: %s\n' "$(uptime | awk -F'load average: ' '{print $2}')"
-echo
+execute_real() {
+  check_dependencies
+  print_plan
+  echo
 
-echo "[MEMORY]"
-free -h | sed -n '1,3p'
-echo
+  local uptime_human
+  uptime_human="$(uptime -p 2>/dev/null || uptime)"
 
-echo "[DISK]"
-df -h / | sed -n '1,2p'
-echo
+  echo "[SYSTEM]"
+  printf 'Host: %s\n' "$(hostname)"
+  printf 'Time: %s\n' "$(date '+%F %T %Z')"
+  printf 'Uptime: %s\n' "$uptime_human"
+  printf 'Load: %s\n' "$(uptime | awk -F'load average: ' '{print $2}')"
+  echo
 
-if command -v upower >/dev/null 2>&1; then
-  BAT_PATH="$(upower -e 2>/dev/null | grep -E 'battery|BAT' | head -n1 || true)"
-  if [[ -n "$BAT_PATH" ]]; then
-    echo "[BATTERY]"
-    upower -i "$BAT_PATH" | match_cmd -i 'state|percentage|time to empty|time to full' || true
-    echo
+  echo "[MEMORY]"
+  free -h | sed -n '1,3p'
+  echo
+
+  echo "[DISK]"
+  df -h / | sed -n '1,2p'
+  echo
+
+  if command -v upower >/dev/null 2>&1; then
+    local bat_path
+    bat_path="$(upower -e 2>/dev/null | grep -E 'battery|BAT' | head -n1 || true)"
+    if [[ -n "$bat_path" ]]; then
+      echo "[BATTERY]"
+      upower -i "$bat_path" | match_cmd -i 'state|percentage|time to empty|time to full' || true
+      echo
+    fi
   fi
-fi
 
-echo "[TOP CPU]"
-ps -eo pid,comm,%cpu,%mem --sort=-%cpu | sed -n '1,8p'
-echo
+  echo "[TOP CPU]"
+  ps -eo pid,comm,%cpu,%mem --sort=-%cpu | sed -n '1,8p'
+  echo
 
-echo "[SERVICES]"
-for svc in ssh ssh.socket fail2ban docker; do
-  printf '%-12s %s\n' "$svc" "$(systemctl is-active "$svc" 2>/dev/null || echo 'n/a')"
-done
-echo
+  echo "[SERVICES]"
+  local svc
+  for svc in ssh ssh.socket fail2ban docker; do
+    printf '%-12s %s\n' "$svc" "$(systemctl is-active "$svc" 2>/dev/null || echo 'n/a')"
+  done
+  echo
 
-echo "[PORTS]"
-ss -lntp 2>/dev/null | match_cmd ':(22|80|443|8000|8001|9443)\s' || echo 'No common tracked ports listening.'
-echo
-printf 'Result: %s\n' "OK"
+  echo "[PORTS]"
+  ss -lntp 2>/dev/null | match_cmd ':(22|80|443|8000|8001|9443)\s' || echo 'No common tracked ports listening.'
+  echo
+  printf 'Result: %s\n' "OK"
+}
+
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

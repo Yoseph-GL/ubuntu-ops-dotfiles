@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+SNAPSHOTS_DIR="$HOME/Backups/Snapshots"
+
+FROM_DIR=""
+TO_DIR="$HOME"
+MODE="dry-run"
+
 usage() {
   cat <<'USAGE'
 Usage: restore-skeleton --from SNAPSHOT_DIR [--to TARGET_DIR] [--run]
@@ -9,7 +16,8 @@ Recreate directory structure from a skeleton snapshot (directories only).
 No files are copied.
 
 Options:
-  --from DIR   Source skeleton snapshot directory (required)
+  --from DIR   Source skeleton snapshot directory (required).
+               Must be inside $HOME/Backups/Snapshots.
   --to DIR     Target directory to recreate structure.
                Default: $HOME
   --run        Execute restore.
@@ -26,58 +34,82 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
-FROM_DIR=""
-TO_DIR="$HOME"
-MODE="dry-run"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --from)
-      FROM_DIR="${2:?Missing value for --from}"
-      shift 2
-      ;;
-    --to)
-      TO_DIR="${2:?Missing value for --to}"
-      shift 2
-      ;;
-    --run)
-      MODE="run"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
+validate_from_dir() {
+  local from="${1%/}"
+  case "$from" in
+    "$SNAPSHOTS_DIR"|"$SNAPSHOTS_DIR"/*) ;;
     *)
-      die "Unknown argument: $1"
+      die "Invalid --from path: $1. It must be inside $SNAPSHOTS_DIR."
       ;;
   esac
-done
+  [[ -d "$from" ]] || die "Snapshot directory not found: $from"
+}
 
-if [[ -z "$FROM_DIR" ]]; then
-  die "--from is required"
-fi
-if [[ ! -d "$FROM_DIR" ]]; then
-  die "Snapshot directory not found: $FROM_DIR"
-fi
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --from)
+        FROM_DIR="${2:?Missing value for --from}"
+        shift 2
+        ;;
+      --to)
+        TO_DIR="${2:?Missing value for --to}"
+        shift 2
+        ;;
+      --run)
+        MODE="run"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-echo "Mode: $MODE"
-echo "From: $FROM_DIR"
-echo "To:   $TO_DIR"
-echo
-echo "Would run:"
-echo "  rsync -a -f'+ */' -f'- *' \"$FROM_DIR/\" \"$TO_DIR/\""
-
-if [[ "$MODE" != "run" ]]; then
+execute_dry_run() {
+  echo "=== RESTORE SKELETON ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo "From: $FROM_DIR"
+  echo "To:   $TO_DIR"
+  echo
+  echo "Would run:"
+  echo "  rsync -a -f'+ */' -f'- *' \"$FROM_DIR/\" \"$TO_DIR/\""
   echo
   echo "Dry-run only. Re-run with --run to execute."
-  exit 0
-fi
+}
 
-require_cmd rsync
+execute_real() {
+  require_cmd rsync
+  mkdir -p "$TO_DIR"
+  rsync -a -f'+ */' -f'- *' "$FROM_DIR/" "$TO_DIR/"
+  echo "Skeleton restored from '$FROM_DIR' to '$TO_DIR'"
+}
 
-mkdir -p "$TO_DIR"
-rsync -a -f'+ */' -f'- *' "$FROM_DIR/" "$TO_DIR/"
-echo "Skeleton restored from '$FROM_DIR' to '$TO_DIR'"
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  [[ -n "$FROM_DIR" ]] || die "--from is required"
+  validate_from_dir "$FROM_DIR"
+
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

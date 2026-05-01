@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+MODE="dry-run"
+
 usage() {
   cat <<'USAGE'
 Usage:
-  install-direnv-just-k6 --run
+  install-direnv-just-k6 [--run]
 
 What it does:
   - Adds k6 official apt repository keyring/source
   - Installs: direnv, just, k6
   - Uses --no-install-recommends for minimal footprint
+
+Default mode is dry-run. Use --run to execute.
 USAGE
 }
 
@@ -22,39 +28,91 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
-if [[ "${1:-}" != "--run" ]]; then
-  usage
-  exit 0
-fi
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --run)
+        MODE="run"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-require_cmd sudo
-require_cmd curl
-require_cmd gpg
+check_dependencies() {
+  require_cmd sudo
+  require_cmd curl
+  require_cmd gpg
+  require_cmd apt-get
+  require_cmd tee
+}
 
-if ! sudo -v; then
-  die "sudo authentication failed."
-fi
+execute_dry_run() {
+  echo "=== INSTALL DIRENV/JUST/K6 ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo
+  echo "Would run:"
+  echo "  sudo install -d -m 0755 /etc/apt/keyrings"
+  echo "  curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/k6.gpg"
+  echo "  sudo chmod 0644 /etc/apt/keyrings/k6.gpg"
+  echo "  echo \"deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main\" | sudo tee /etc/apt/sources.list.d/k6.list"
+  echo "  sudo apt-get update"
+  echo "  sudo apt-get install -y --no-install-recommends direnv just k6"
+  echo
+  echo "Dry-run only. Re-run with --run to execute."
+}
 
-sudo install -d -m 0755 /etc/apt/keyrings
+execute_real() {
+  check_dependencies
+  sudo -v || die "sudo authentication failed."
 
-if [[ ! -f /etc/apt/keyrings/k6.gpg ]]; then
-  log_info "Adding k6 apt keyring"
-  curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/k6.gpg
-  sudo chmod 0644 /etc/apt/keyrings/k6.gpg
-fi
+  sudo install -d -m 0755 /etc/apt/keyrings
 
-log_info "Configuring k6 apt source"
-echo "deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main" \
-  | sudo tee /etc/apt/sources.list.d/k6.list >/dev/null
+  if [[ ! -f /etc/apt/keyrings/k6.gpg ]]; then
+    log_info "Adding k6 apt keyring"
+    curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/k6.gpg
+    sudo chmod 0644 /etc/apt/keyrings/k6.gpg
+  fi
 
-log_info "Installing packages"
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends direnv just k6
+  log_info "Configuring k6 apt source"
+  echo "deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main" \
+    | sudo tee /etc/apt/sources.list.d/k6.list >/dev/null
 
-echo
-echo "Installed versions:"
-direnv version
-just --version
-k6 version | head -n 1
+  log_info "Installing packages"
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends direnv just k6
+
+  echo
+  echo "Installed versions:"
+  direnv version
+  just --version
+  k6 version | head -n 1
+}
+
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

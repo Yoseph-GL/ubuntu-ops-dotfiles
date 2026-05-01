@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 SCRIPT_NAME="$(basename "$0")"
 LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/${SCRIPT_NAME}.lock"
+
+SNAPSHOTS_DIR="$HOME/Backups/Snapshots"
+CONFIG_DUMPS_DIR="$SNAPSHOTS_DIR/Config_Dumps"
+
+MODE="dry-run"
+BACKUP_DIR="$CONFIG_DUMPS_DIR"
 
 usage() {
   cat <<'USAGE'
@@ -14,6 +21,9 @@ Default mode is dry-run (shows actions only).
 Options:
   --run             Execute updates and write package snapshots.
   --backup-dir DIR  Directory to save package lists.
+                    Allowed values:
+                    - $HOME/Backups/Snapshots
+                    - $HOME/Backups/Snapshots/Config_Dumps
                     Default: $HOME/Backups/Snapshots/Config_Dumps
   -h, --help        Show this help.
 USAGE
@@ -29,123 +39,177 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
-MODE="dry-run"
-BACKUP_DIR="$HOME/Backups/Snapshots/Config_Dumps"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --run)
-      MODE="run"
-      shift
-      ;;
-    --backup-dir)
-      BACKUP_DIR="${2:?Missing value for --backup-dir}"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
+validate_backup_dir() {
+  local dir="${1%/}"
+  case "$dir" in
+    "$SNAPSHOTS_DIR"|"$CONFIG_DUMPS_DIR") ;;
     *)
-      die "Unknown argument: $1"
+      die "Invalid --backup-dir: $1. Use $SNAPSHOTS_DIR or $CONFIG_DUMPS_DIR."
       ;;
   esac
-done
+}
 
-echo "=== UPDATE-ALL ==="
-echo "Mode: $MODE"
-echo "Backup dir: $BACKUP_DIR"
-echo
-echo "Would run:"
-echo "  sudo apt-get update"
-echo "  sudo apt-get full-upgrade -y"
-echo "  sudo apt-get autoremove -y"
-echo "  sudo apt-get autoclean -y"
-echo "  apt list --upgradable > $BACKUP_DIR/apt_upgradable_before.txt"
-echo "  apt list --upgradable > $BACKUP_DIR/apt_upgradable_after.txt"
-if command -v flatpak >/dev/null 2>&1; then
-  echo "  flatpak update -y"
-fi
-if command -v snap >/dev/null 2>&1; then
-  echo "  snap refresh --list > $BACKUP_DIR/snap_pending_before.txt"
-  echo "  sudo snap refresh"
-  echo "  snap refresh --list > $BACKUP_DIR/snap_pending_after.txt"
-fi
-echo "  apt-mark showmanual | sort > $BACKUP_DIR/apt_list.txt"
-if command -v flatpak >/dev/null 2>&1; then
-  echo "  flatpak list --app --columns=application,name | sort > $BACKUP_DIR/flatpak_list.txt"
-fi
-if command -v snap >/dev/null 2>&1; then
-  echo "  snap list | tail -n +2 | awk '{print \$1}' | sort > $BACKUP_DIR/snap_list.txt"
-fi
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --run)
+        MODE="run"
+        shift
+        ;;
+      --backup-dir)
+        BACKUP_DIR="${2:?Missing value for --backup-dir}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-if [[ "$MODE" != "run" ]]; then
+check_dependencies() {
+  require_cmd flock
+  require_cmd sudo
+  require_cmd apt-get
+  require_cmd apt-mark
+  require_cmd sort
+}
+
+print_plan() {
+  echo "=== UPDATE-ALL ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo "Backup dir: $BACKUP_DIR"
+  echo
+  echo "Would run:"
+  echo "  sudo apt-get update"
+  echo "  sudo apt-get full-upgrade -y"
+  echo "  sudo apt-get autoremove -y"
+  echo "  sudo apt-get autoclean -y"
+  echo "  apt list --upgradable > $BACKUP_DIR/apt_upgradable_before.txt"
+  echo "  apt list --upgradable > $BACKUP_DIR/apt_upgradable_after.txt"
+  if command -v flatpak >/dev/null 2>&1; then
+    echo "  flatpak update -y"
+  fi
+  if command -v snap >/dev/null 2>&1; then
+    echo "  snap refresh --list > $BACKUP_DIR/snap_pending_before.txt"
+    echo "  sudo snap refresh"
+    echo "  snap refresh --list > $BACKUP_DIR/snap_pending_after.txt"
+  fi
+  echo "  apt-mark showmanual | sort > $BACKUP_DIR/apt_list.txt"
+  if command -v flatpak >/dev/null 2>&1; then
+    echo "  flatpak list --app --columns=application,name | sort > $BACKUP_DIR/flatpak_list.txt"
+  fi
+  if command -v snap >/dev/null 2>&1; then
+    echo "  snap list | tail -n +2 | awk '{print \$1}' | sort > $BACKUP_DIR/snap_list.txt"
+  fi
+}
+
+save_snapshot_if_possible() {
+  local cmd_desc="$1"
+  local output_file="$2"
+  shift 2
+  if ! "$@" > "$output_file" 2>/dev/null; then
+    log_warn "Could not write snapshot for $cmd_desc -> $output_file"
+  fi
+}
+
+execute_dry_run() {
+  print_plan
   echo
   echo "Dry-run only. Re-run with --run to execute."
-  exit 0
-fi
+}
 
-require_cmd flock
-require_cmd sudo
-require_cmd apt-get
-require_cmd apt-mark
+execute_real() {
+  check_dependencies
+  mkdir -p "$BACKUP_DIR"
 
-mkdir -p "$BACKUP_DIR"
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    die "Another $SCRIPT_NAME process is already running."
+  fi
 
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  die "Another $SCRIPT_NAME process is already running."
-fi
+  sudo -v || die "sudo authentication failed."
 
-if ! sudo -v; then
-  die "sudo authentication failed."
-fi
+  log_info "Saving package snapshots (before update)"
+  if command -v apt >/dev/null 2>&1; then
+    save_snapshot_if_possible "apt upgradable before" \
+      "$BACKUP_DIR/apt_upgradable_before.txt" \
+      apt list --upgradable
+  else
+    log_warn "apt command not found; skipping apt_upgradable_before snapshot"
+  fi
 
-log_info "Saving package snapshots (before update)"
-if command -v apt >/dev/null 2>&1; then
-  apt list --upgradable 2>/dev/null > "$BACKUP_DIR/apt_upgradable_before.txt" || true
-else
-  log_warn "apt command not found; skipping apt_upgradable_before snapshot"
-fi
+  if command -v snap >/dev/null 2>&1; then
+    save_snapshot_if_possible "snap pending before" \
+      "$BACKUP_DIR/snap_pending_before.txt" \
+      snap refresh --list
+  fi
 
-if command -v snap >/dev/null 2>&1; then
-  snap refresh --list > "$BACKUP_DIR/snap_pending_before.txt" 2>/dev/null || true
-fi
+  echo
+  echo "--- ACTUALIZANDO SISTEMA (APT) ---"
+  sudo apt-get update
+  sudo apt-get full-upgrade -y
+  sudo apt-get autoremove -y
+  sudo apt-get autoclean -y
 
-echo
-echo "--- ACTUALIZANDO SISTEMA (APT) ---"
-sudo apt-get update
-sudo apt-get full-upgrade -y
-sudo apt-get autoremove -y
-sudo apt-get autoclean -y
+  if command -v snap >/dev/null 2>&1; then
+    echo "--- ACTUALIZANDO APPS (SNAP) ---"
+    sudo snap refresh
+  else
+    echo "--- SNAP NO INSTALADO, OMITIENDO ---"
+  fi
 
-if command -v snap >/dev/null 2>&1; then
-  echo "--- ACTUALIZANDO APPS (SNAP) ---"
-  sudo snap refresh
-else
-  echo "--- SNAP NO INSTALADO, OMITIENDO ---"
-fi
+  if command -v flatpak >/dev/null 2>&1; then
+    echo "--- ACTUALIZANDO APPS (FLATPAK) ---"
+    flatpak update -y
+  else
+    echo "--- FLATPAK NO INSTALADO, OMITIENDO ---"
+  fi
 
-if command -v flatpak >/dev/null 2>&1; then
-  echo "--- ACTUALIZANDO APPS (FLATPAK) ---"
-  flatpak update -y
-else
-  echo "--- FLATPAK NO INSTALADO, OMITIENDO ---"
-fi
+  echo "--- GUARDANDO LISTAS DE PAQUETES ---"
+  apt-mark showmanual | sort > "$BACKUP_DIR/apt_list.txt"
+  if command -v apt >/dev/null 2>&1; then
+    save_snapshot_if_possible "apt upgradable after" \
+      "$BACKUP_DIR/apt_upgradable_after.txt" \
+      apt list --upgradable
+  fi
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak list --app --columns=application,name | sort > "$BACKUP_DIR/flatpak_list.txt"
+  fi
+  if command -v snap >/dev/null 2>&1; then
+    snap list | tail -n +2 | awk '{print $1}' | sort > "$BACKUP_DIR/snap_list.txt"
+    save_snapshot_if_possible "snap pending after" \
+      "$BACKUP_DIR/snap_pending_after.txt" \
+      snap refresh --list
+  fi
 
-echo "--- GUARDANDO LISTAS DE PAQUETES ---"
-apt-mark showmanual | sort > "$BACKUP_DIR/apt_list.txt"
-if command -v apt >/dev/null 2>&1; then
-  apt list --upgradable 2>/dev/null > "$BACKUP_DIR/apt_upgradable_after.txt" || true
-fi
-if command -v flatpak >/dev/null 2>&1; then
-  flatpak list --app --columns=application,name | sort > "$BACKUP_DIR/flatpak_list.txt"
-fi
-if command -v snap >/dev/null 2>&1; then
-  snap list | tail -n +2 | awk '{print $1}' | sort > "$BACKUP_DIR/snap_list.txt"
-  snap refresh --list > "$BACKUP_DIR/snap_pending_after.txt" 2>/dev/null || true
-fi
+  echo "--- TODO LISTO: Sistema actualizado y snapshots guardados en $BACKUP_DIR ---"
+}
 
-echo "--- TODO LISTO: Sistema actualizado y snapshots guardados en $BACKUP_DIR ---"
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  validate_backup_dir "$BACKUP_DIR"
+  mkdir -p "$BACKUP_DIR"
+
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"

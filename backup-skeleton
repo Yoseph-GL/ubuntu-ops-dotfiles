@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+SNAPSHOTS_DIR="$HOME/Backups/Snapshots"
+CONFIG_DUMPS_DIR="$SNAPSHOTS_DIR/Config_Dumps"
+
+DEST_BASE="$SNAPSHOTS_DIR"
+SNAP_NAME="home-skeleton-$(date +%F_%H%M%S)"
+MODE="dry-run"
+
 usage() {
   cat <<'USAGE'
 Usage: backup-skeleton [--run] [--dest DIR] [--name NAME]
@@ -12,6 +20,9 @@ Options:
   --run        Execute snapshot creation.
                Default behavior is dry-run.
   --dest DIR   Base destination directory.
+               Allowed values:
+               - $HOME/Backups/Snapshots
+               - $HOME/Backups/Snapshots/Config_Dumps
                Default: $HOME/Backups/Snapshots
   --name NAME  Snapshot folder name.
                Default: home-skeleton-YYYY-MM-DD_HHMMSS
@@ -27,62 +38,92 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
 }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
-DEST_BASE="$HOME/Backups/Snapshots"
-SNAP_NAME="home-skeleton-$(date +%F_%H%M%S)"
-MODE="dry-run"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dest)
-      DEST_BASE="${2:?Missing value for --dest}"
-      shift 2
-      ;;
-    --run)
-      MODE="run"
-      shift
-      ;;
-    --name)
-      SNAP_NAME="${2:?Missing value for --name}"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
+validate_dest_base() {
+  local dest="${1%/}"
+  case "$dest" in
+    "$SNAPSHOTS_DIR"|"$CONFIG_DUMPS_DIR") ;;
     *)
-      die "Unknown argument: $1"
+      die "Invalid --dest: $1. Use $SNAPSHOTS_DIR or $CONFIG_DUMPS_DIR."
       ;;
   esac
-done
+}
 
-DEST_DIR="$DEST_BASE/$SNAP_NAME"
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --dest)
+        DEST_BASE="${2:?Missing value for --dest}"
+        shift 2
+        ;;
+      --run)
+        MODE="run"
+        shift
+        ;;
+      --name)
+        SNAP_NAME="${2:?Missing value for --name}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-echo "Mode: $MODE"
-echo "Source: $HOME/"
-echo "Destination: $DEST_DIR"
-echo
-echo "Would run:"
-echo "  rsync -a -f'+ */' -f'- *' [excludes...] \"$HOME/\" \"$DEST_DIR/\""
-
-if [[ "$MODE" != "run" ]]; then
+execute_dry_run() {
+  local dest_dir="$1"
+  echo "=== BACKUP SKELETON ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo "Source: $HOME/"
+  echo "Destination: $dest_dir"
+  echo
+  echo "Would run:"
+  echo "  rsync -a -f'+ */' -f'- *' [excludes...] \"$HOME/\" \"$dest_dir/\""
   echo
   echo "Dry-run only. Re-run with --run to execute."
-  exit 0
-fi
+}
 
-require_cmd rsync
+execute_real() {
+  local dest_dir="$1"
+  require_cmd rsync
+  mkdir -p "$DEST_BASE" "$dest_dir"
 
-mkdir -p "$DEST_DIR"
+  rsync -a \
+    -f'+ */' -f'- *' \
+    --exclude='Backups/Snapshots/***' \
+    --exclude='.cache/***' \
+    --exclude='.local/share/Trash/***' \
+    --exclude='.npm/***' \
+    --exclude='.gradle/***' \
+    "$HOME/" "$dest_dir/"
 
-rsync -a \
-  -f'+ */' -f'- *' \
-  --exclude='Backups/Snapshots/***' \
-  --exclude='.cache/***' \
-  --exclude='.local/share/Trash/***' \
-  --exclude='.npm/***' \
-  --exclude='.gradle/***' \
-  "$HOME/" "$DEST_DIR/"
+  echo "Skeleton snapshot created: $dest_dir"
+}
 
-echo "Skeleton snapshot created: $DEST_DIR"
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  validate_dest_base "$DEST_BASE"
+
+  local dest_dir="$DEST_BASE/$SNAP_NAME"
+  if [[ "$MODE" == "run" ]]; then
+    execute_real "$dest_dir"
+  else
+    execute_dry_run "$dest_dir"
+  fi
+}
+
+main "$@"

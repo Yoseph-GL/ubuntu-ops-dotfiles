@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+MODE="dry-run"
+WITH_VOLUMES=0
+
 usage() {
   cat <<'USAGE'
 Usage: docker-clean-safe [--run] [--with-volumes]
@@ -22,41 +27,54 @@ log_info() { printf '[INFO] %s\n' "$*"; }
 log_err() { printf '[ERROR] %s\n' "$*" >&2; }
 die() { log_err "$*"; exit 1; }
 
-trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
 
-MODE="dry-run"
-WITH_VOLUMES=0
+reject_run_flag_typo() {
+  local arg="$1"
+  if [[ "$arg" != "--run" && "$arg" =~ ^[-/]+[Rr][Uu][Nn]$ ]]; then
+    die "Invalid execution flag '$arg'. Use exactly --run."
+  fi
+}
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --run)
-      MODE="run"
-      shift
-      ;;
-    --with-volumes)
-      WITH_VOLUMES=1
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      die "Unknown argument: $1"
-      ;;
-  esac
-done
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    reject_run_flag_typo "$1"
+    case "$1" in
+      --run)
+        MODE="run"
+        shift
+        ;;
+      --with-volumes)
+        WITH_VOLUMES=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
-echo "=== DOCKER CLEAN SAFE ==="
-echo "Mode: $MODE"
-echo "With volumes: $WITH_VOLUMES"
-echo
+print_plan() {
+  echo "=== DOCKER CLEAN SAFE ==="
+  echo "Script path: $SCRIPT_DIR"
+  echo "Mode: $MODE"
+  echo "With volumes: $WITH_VOLUMES"
+  echo
+}
 
-command -v docker >/dev/null 2>&1 || die "Docker not available"
-docker system df
-echo
-
-if [[ "$MODE" == "dry-run" ]]; then
+execute_dry_run() {
+  print_plan
+  require_cmd docker
+  docker system df
+  echo
   echo "[DRY RUN]"
   echo "Would run:"
   echo "  docker image prune -a -f"
@@ -67,18 +85,36 @@ if [[ "$MODE" == "dry-run" ]]; then
     echo "  docker volume prune -f"
   fi
   echo
-  echo "Run with: docker-clean-safe --run [--with-volumes]"
-  exit 0
-fi
+  echo "Dry-run only. Re-run with --run to execute."
+}
 
-log_info "Cleaning Docker artifacts"
-docker image prune -a -f
-docker container prune -f
-docker builder prune -f
-docker network prune -f
-if [[ "$WITH_VOLUMES" -eq 1 ]]; then
-  docker volume prune -f
-fi
-echo
-echo "[AFTER]"
-docker system df
+execute_real() {
+  print_plan
+  require_cmd docker
+  docker system df
+  echo
+
+  log_info "Cleaning Docker artifacts"
+  docker image prune -a -f
+  docker container prune -f
+  docker builder prune -f
+  docker network prune -f
+  if [[ "$WITH_VOLUMES" -eq 1 ]]; then
+    docker volume prune -f
+  fi
+  echo
+  echo "[AFTER]"
+  docker system df
+}
+
+main() {
+  trap 'log_err "Failed at line $LINENO: $BASH_COMMAND"' ERR
+  parse_args "$@"
+  if [[ "$MODE" == "run" ]]; then
+    execute_real
+  else
+    execute_dry_run
+  fi
+}
+
+main "$@"
