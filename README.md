@@ -69,19 +69,10 @@ Limpieza segura de artefactos Docker no utilizados.
 
 ## Backups and Snapshots
 
-### `backup-configs`
-
-Respalda archivos de configuracion clave y snapshot del directorio actual de scripts.
-
-```bash
-./backup-configs
-./backup-configs --run
-./backup-configs --run --dest "$HOME/Backups/Snapshots/Config_Dumps" --name my-configs
-```
-
 ### `backup-skeleton`
 
 Guarda solo estructura de directorios de `$HOME` (sin archivos).
+Incluye failsafe de profundidad máxima de 6 niveles y excluye `Backups/` para evitar recursión del destino.
 
 ```bash
 ./backup-skeleton

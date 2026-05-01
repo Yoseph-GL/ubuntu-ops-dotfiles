@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 SNAPSHOTS_DIR="$HOME/Backups/Snapshots"
 CONFIG_DUMPS_DIR="$SNAPSHOTS_DIR/Config_Dumps"
+MAX_DEPTH=6
 
 DEST_BASE="$SNAPSHOTS_DIR"
 SNAP_NAME="home-skeleton-$(date +%F_%H%M%S)"
@@ -91,24 +92,31 @@ execute_dry_run() {
   echo "Destination: $dest_dir"
   echo
   echo "Would run:"
-  echo "  rsync -a -f'+ */' -f'- *' [excludes...] \"$HOME/\" \"$dest_dir/\""
+  echo "  find \"$HOME\" -mindepth 1 -maxdepth $MAX_DEPTH -type d -path \"$HOME/Backups\" -prune -o -type d -print"
+  echo "  mkdir -p \"$dest_dir\"/<relative-directories>"
   echo
   echo "Dry-run only. Re-run with --run to execute."
 }
 
 execute_real() {
   local dest_dir="$1"
-  require_cmd rsync
+  local dir rel target
+  require_cmd find
   mkdir -p "$DEST_BASE" "$dest_dir"
 
-  rsync -a \
-    -f'+ */' -f'- *' \
-    --exclude='Backups/Snapshots/***' \
-    --exclude='.cache/***' \
-    --exclude='.local/share/Trash/***' \
-    --exclude='.npm/***' \
-    --exclude='.gradle/***' \
-    "$HOME/" "$dest_dir/"
+  while IFS= read -r dir; do
+    rel="${dir#"$HOME"/}"
+    target="$dest_dir/$rel"
+    mkdir -p "$target"
+  done < <(
+    find "$HOME" -mindepth 1 -maxdepth "$MAX_DEPTH" \
+      \( -path "$HOME/Backups" -o -path "$HOME/Backups/*" \
+         -o -path "$HOME/.cache" -o -path "$HOME/.cache/*" \
+         -o -path "$HOME/.local/share/Trash" -o -path "$HOME/.local/share/Trash/*" \
+         -o -path "$HOME/.npm" -o -path "$HOME/.npm/*" \
+         -o -path "$HOME/.gradle" -o -path "$HOME/.gradle/*" \) -prune \
+      -o -type d -print
+  )
 
   echo "Skeleton snapshot created: $dest_dir"
 }
