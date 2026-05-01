@@ -115,9 +115,13 @@ print_plan() {
 
 execute_dry_run() {
   print_plan
+  log_info "Starting update-all (dry-run)..."
   "$UPDATE_CMD" --backup-dir "$BACKUP_DIR"
+  log_info "Completed update-all (dry-run)."
   echo
+  log_info "Starting disk-clean-safe (dry-run)..."
   "$CLEAN_CMD" --days "$DAYS" --deep-system-clean
+  log_info "Completed disk-clean-safe (dry-run)."
   echo
   echo "Dry-run completed. Re-run with --run to execute all steps."
 }
@@ -127,14 +131,16 @@ execute_real() {
   require_cmd flock
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
-    die "Another $SCRIPT_NAME process is already running."
+    die "Another $SCRIPT_NAME process is already running (lock: $LOCK_FILE)."
   fi
 
-  log_info "Running update-all"
+  log_info "Starting update-all..."
   "$UPDATE_CMD" --run --backup-dir "$BACKUP_DIR"
+  log_info "Completed update-all."
   echo
-  log_info "Running disk-clean-safe"
+  log_info "Starting disk-clean-safe..."
   "$CLEAN_CMD" --run --days "$DAYS" --deep-system-clean
+  log_info "Completed disk-clean-safe."
   echo
   echo "Maintenance completed."
 }

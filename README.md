@@ -1,31 +1,31 @@
 # Ops Scripts
 
-Coleccion de scripts de operacion para mantenimiento, snapshots y diagnostico local.
+Collection of operations scripts for local maintenance, snapshots, and diagnostics.
 
 ## Manual-Safe Policy
 
-Todos los scripts siguen un modelo manual-safe estricto:
+All scripts follow a strict manual-safe model:
 
-- Sin flags: siempre `dry-run`.
-- Ejecucion real: solo con `--run`.
-- Tolerancia cero a typos del flag de ejecucion (`-run`, `/run`, etc.): abortan con error y salida `1`.
-- Se usa `set -euo pipefail` y validaciones de dependencias.
-- Todos los scripts anclan su contexto con `SCRIPT_DIR`.
+- Without flags, scripts always run in `dry-run` mode.
+- Real execution requires `--run`.
+- Zero tolerance for execution-flag typos (`-run`, `/run`, etc.): scripts abort with an error and exit code `1`.
+- Scripts use `set -euo pipefail` and dependency checks.
+- All scripts anchor runtime context with `SCRIPT_DIR`.
 
 ## Backup Paths Policy
 
-Las rutas de backups se restringen a:
+Backup paths are restricted to:
 
 - `$HOME/Backups/Snapshots`
 - `$HOME/Backups/Snapshots/Config_Dumps`
 
-Los scripts crean de forma segura los directorios requeridos con `mkdir -p`.
+Scripts safely create required destination directories with `mkdir -p`.
 
 ## Maintenance and Cleanup
 
 ### `update-all`
 
-Actualiza paquetes (`apt`, `snap`, `flatpak`) y genera snapshots de estado.
+Updates packages (`apt`, `snap`, `flatpak`) and writes package state snapshots.
 
 ```bash
 ./update-all
@@ -35,7 +35,7 @@ Actualiza paquetes (`apt`, `snap`, `flatpak`) y genera snapshots de estado.
 
 ### `maintenance-all`
 
-Orquesta:
+Orchestrates:
 1. `update-all`
 2. `disk-clean-safe --deep-system-clean`
 
@@ -48,7 +48,9 @@ Orquesta:
 
 ### `disk-clean-safe`
 
-Limpieza segura de basura de usuario, cache y temporales antiguos.
+Safe cleanup of user-space reclaimable data (trash, cache, and old temporary files).
+
+Note: `--deep-system-clean` performs I/O-intensive operations (including journal vacuum) and may take several minutes to complete. This is expected behavior.
 
 ```bash
 ./disk-clean-safe
@@ -59,7 +61,7 @@ Limpieza segura de basura de usuario, cache y temporales antiguos.
 
 ### `docker-clean-safe`
 
-Limpieza segura de artefactos Docker no utilizados.
+Safe cleanup of unused Docker artifacts.
 
 ```bash
 ./docker-clean-safe
@@ -71,8 +73,8 @@ Limpieza segura de artefactos Docker no utilizados.
 
 ### `backup-skeleton`
 
-Guarda solo estructura de directorios de `$HOME` (sin archivos).
-Incluye failsafe de profundidad máxima de 6 niveles y excluye `Backups/` para evitar recursión del destino.
+Creates a directory-structure-only snapshot of `$HOME` (no files).
+Includes a max-depth failsafe of 6 levels and excludes `Backups/` to avoid recursive destination capture.
 
 ```bash
 ./backup-skeleton
@@ -82,7 +84,7 @@ Incluye failsafe de profundidad máxima de 6 niveles y excluye `Backups/` para e
 
 ### `restore-skeleton`
 
-Restaura estructura de directorios desde un snapshot ubicado dentro de `$HOME/Backups/Snapshots`.
+Recreates directory structure from a snapshot located under `$HOME/Backups/Snapshots`.
 
 ```bash
 ./restore-skeleton --from "$HOME/Backups/Snapshots/home-skeleton"
@@ -93,7 +95,7 @@ Restaura estructura de directorios desde un snapshot ubicado dentro de `$HOME/Ba
 
 ### `health-check`
 
-Diagnostico rapido de host (sistema, memoria, disco, servicios y puertos comunes).
+Quick host diagnostics (system, memory, disk, services, and common ports).
 
 ```bash
 ./health-check
@@ -102,7 +104,7 @@ Diagnostico rapido de host (sistema, memoria, disco, servicios y puertos comunes
 
 ### `net-debug`
 
-Diagnostico de red (IPs, ruta por defecto, DNS, pings y puertos).
+Network diagnostics (IPs, default route, DNS, pings, and ports).
 
 ```bash
 ./net-debug
@@ -112,7 +114,7 @@ Diagnostico de red (IPs, ruta por defecto, DNS, pings y puertos).
 
 ### `check-logs.sh`
 
-Diagnostico extendido de logs y estado del sistema.
+Extended system/log diagnostics.
 
 ```bash
 ./check-logs.sh
@@ -121,7 +123,7 @@ Diagnostico extendido de logs y estado del sistema.
 
 ### `docker-net-audit.sh`
 
-Auditoria de mapeo de red Docker (veth/contenedor/bridge) y redes sin contenedores activos.
+Docker network mapping audit (veth/container/bridge) and detection of networks without active containers.
 
 ```bash
 ./docker-net-audit.sh
@@ -132,7 +134,7 @@ Auditoria de mapeo de red Docker (veth/contenedor/bridge) y redes sin contenedor
 
 ### `install-direnv-just-k6`
 
-Configura repositorio oficial de k6 e instala `direnv`, `just` y `k6`.
+Configures the official k6 repository and installs `direnv`, `just`, and `k6`.
 
 ```bash
 ./install-direnv-just-k6
@@ -141,7 +143,7 @@ Configura repositorio oficial de k6 e instala `direnv`, `just` y `k6`.
 
 ### `lint-scripts`
 
-Valida sintaxis (`bash -n`) y ejecuta `shellcheck` si esta instalado.
+Validates shell syntax (`bash -n`) and runs `shellcheck` when installed.
 
 ```bash
 ./lint-scripts

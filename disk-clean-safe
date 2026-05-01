@@ -6,6 +6,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 MODE="dry-run"
 DAYS=14
 DEEP_SYSTEM_CLEAN=0
+APT_GET_COMMON_ARGS=(
+  -y
+  -qq
+  -o DPkg::Lock::Timeout=10
+  -o Dpkg::Options::="--force-confdef"
+  -o Dpkg::Options::="--force-confold"
+)
 
 TRASH_DIR="$HOME/.local/share/Trash/files"
 THUMBS_DIR="$HOME/.cache/thumbnails"
@@ -53,6 +60,10 @@ die() { log_err "$*"; exit 1; }
 require_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+apt_get_noninteractive() {
+  sudo -n DEBIAN_FRONTEND=noninteractive apt-get "${APT_GET_COMMON_ARGS[@]}" "$@"
 }
 
 reject_run_flag_typo() {
@@ -177,12 +188,12 @@ execute_dry_run() {
   echo "  ~/.cache old files (after protected filter): $cache_count"
   if [[ "$DEEP_SYSTEM_CLEAN" -eq 1 ]]; then
     echo "  [deep-system-clean planned]"
-    echo "    - sudo apt-get autoremove -y"
-    echo "    - sudo apt-get autoclean -y"
-    echo "    - sudo apt-get clean"
+    echo "    - sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o DPkg::Lock::Timeout=10 -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" autoremove"
+    echo "    - sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o DPkg::Lock::Timeout=10 -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" autoclean"
+    echo "    - sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o DPkg::Lock::Timeout=10 -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" clean"
     echo "    - snap: remove disabled revisions"
-    echo "    - flatpak uninstall --unused -y"
-    echo "    - sudo journalctl --vacuum-time=14d"
+    echo "    - flatpak uninstall --unused -y --noninteractive"
+    echo "    - sudo -n journalctl --vacuum-time=14d"
   fi
   echo
   echo "Dry-run only. Re-run with --run to execute."
@@ -190,34 +201,46 @@ execute_dry_run() {
 
 run_deep_cleanup() {
   check_deep_dependencies
-  sudo -v || die "sudo authentication failed."
+  sudo -n -v || die "sudo credentials unavailable in non-interactive mode."
 
   echo
   echo "[SYSTEM CLEANUP]"
-  sudo apt-get autoremove -y
-  sudo apt-get autoclean -y
-  sudo apt-get clean
+  log_info "Running APT autoremove..."
+  apt_get_noninteractive autoremove
+  log_info "Completed APT autoremove."
+  log_info "Running APT autoclean..."
+  apt_get_noninteractive autoclean
+  log_info "Completed APT autoclean."
+  log_info "Running APT clean..."
+  apt_get_noninteractive clean
+  log_info "Completed APT clean."
 
   if command -v snap >/dev/null 2>&1; then
+    log_info "Running Snap disabled revision cleanup..."
     local name rev
     while IFS= read -r line; do
       name="$(awk '{print $1}' <<<"$line")"
       rev="$(awk '{print $3}' <<<"$line")"
       if [[ -n "$name" && -n "$rev" ]]; then
-        if ! sudo snap remove "$name" --revision="$rev"; then
+        if ! sudo -n snap remove "$name" --revision="$rev"; then
           log_warn "Could not remove disabled snap revision $name/$rev"
         fi
       fi
     done < <(snap list --all 2>/dev/null | awk '/disabled/{print}')
+    log_info "Completed Snap disabled revision cleanup."
   fi
 
   if command -v flatpak >/dev/null 2>&1; then
-    if ! flatpak uninstall --unused -y; then
+    log_info "Running Flatpak unused runtime cleanup..."
+    if ! flatpak uninstall --unused -y --noninteractive; then
       log_warn "flatpak uninstall --unused returned a non-zero status"
     fi
+    log_info "Completed Flatpak unused runtime cleanup."
   fi
 
-  sudo journalctl --vacuum-time=14d
+  log_info "Running journal vacuum (14d)..."
+  sudo -n journalctl --vacuum-time=14d
+  log_info "Completed journal vacuum (14d)."
 }
 
 execute_real() {
@@ -225,15 +248,15 @@ execute_real() {
   print_header
 
   if [[ -d "$TRASH_DIR" ]]; then
-    find "$TRASH_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    find "$TRASH_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true
   fi
 
   if [[ -d "$THUMBS_DIR" ]]; then
-    find "$THUMBS_DIR" -mindepth 1 -maxdepth 3 -type f -delete
+    find "$THUMBS_DIR" -mindepth 1 -maxdepth 3 -type f -delete || true
   fi
 
-  find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f -delete 2>/dev/null
-  find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type d -empty -delete 2>/dev/null
+  find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type f -delete 2>/dev/null || true
+  find /tmp -xdev -user "$USER" -mtime +"$DAYS" -type d -empty -delete 2>/dev/null || true
 
   if [[ -d "$CACHE_DIR" ]]; then
     local file d

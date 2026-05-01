@@ -10,6 +10,13 @@ CONFIG_DUMPS_DIR="$SNAPSHOTS_DIR/Config_Dumps"
 
 MODE="dry-run"
 BACKUP_DIR="$CONFIG_DUMPS_DIR"
+APT_GET_COMMON_ARGS=(
+  -y
+  -qq
+  -o DPkg::Lock::Timeout=10
+  -o Dpkg::Options::="--force-confdef"
+  -o Dpkg::Options::="--force-confold"
+)
 
 usage() {
   cat <<'USAGE'
@@ -37,6 +44,10 @@ die() { log_err "$*"; exit 1; }
 require_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+apt_get_noninteractive() {
+  sudo -n DEBIAN_FRONTEND=noninteractive apt-get "${APT_GET_COMMON_ARGS[@]}" "$@"
 }
 
 reject_run_flag_typo() {
@@ -94,18 +105,18 @@ print_plan() {
   echo "Backup dir: $BACKUP_DIR"
   echo
   echo "Would run:"
-  echo "  sudo apt-get update"
-  echo "  sudo apt-get full-upgrade -y"
-  echo "  sudo apt-get autoremove -y"
-  echo "  sudo apt-get autoclean -y"
+  echo "  sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o DPkg::Lock::Timeout=10 -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" update"
+  echo "  sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o DPkg::Lock::Timeout=10 -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" full-upgrade"
+  echo "  sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o DPkg::Lock::Timeout=10 -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" autoremove"
+  echo "  sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o DPkg::Lock::Timeout=10 -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" autoclean"
   echo "  apt list --upgradable > $BACKUP_DIR/apt_upgradable_before.txt"
   echo "  apt list --upgradable > $BACKUP_DIR/apt_upgradable_after.txt"
   if command -v flatpak >/dev/null 2>&1; then
-    echo "  flatpak update -y"
+    echo "  flatpak update -y --noninteractive"
   fi
   if command -v snap >/dev/null 2>&1; then
     echo "  snap refresh --list > $BACKUP_DIR/snap_pending_before.txt"
-    echo "  sudo snap refresh"
+    echo "  sudo -n snap refresh"
     echo "  snap refresh --list > $BACKUP_DIR/snap_pending_after.txt"
   fi
   echo "  apt-mark showmanual | sort > $BACKUP_DIR/apt_list.txt"
@@ -138,10 +149,10 @@ execute_real() {
 
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
-    die "Another $SCRIPT_NAME process is already running."
+    die "Another $SCRIPT_NAME process is already running (lock: $LOCK_FILE)."
   fi
 
-  sudo -v || die "sudo authentication failed."
+  sudo -n -v || die "sudo credentials unavailable in non-interactive mode."
 
   log_info "Saving package snapshots (before update)"
   if command -v apt >/dev/null 2>&1; then
@@ -159,27 +170,27 @@ execute_real() {
   fi
 
   echo
-  echo "--- ACTUALIZANDO SISTEMA (APT) ---"
-  sudo apt-get update
-  sudo apt-get full-upgrade -y
-  sudo apt-get autoremove -y
-  sudo apt-get autoclean -y
+  echo "--- UPDATING SYSTEM (APT) ---"
+  apt_get_noninteractive update
+  apt_get_noninteractive full-upgrade
+  apt_get_noninteractive autoremove
+  apt_get_noninteractive autoclean
 
   if command -v snap >/dev/null 2>&1; then
-    echo "--- ACTUALIZANDO APPS (SNAP) ---"
-    sudo snap refresh
+    echo "--- UPDATING APPS (SNAP) ---"
+    sudo -n snap refresh
   else
-    echo "--- SNAP NO INSTALADO, OMITIENDO ---"
+    echo "--- SNAP NOT INSTALLED, SKIPPING ---"
   fi
 
   if command -v flatpak >/dev/null 2>&1; then
-    echo "--- ACTUALIZANDO APPS (FLATPAK) ---"
-    flatpak update -y
+    echo "--- UPDATING APPS (FLATPAK) ---"
+    flatpak update -y --noninteractive
   else
-    echo "--- FLATPAK NO INSTALADO, OMITIENDO ---"
+    echo "--- FLATPAK NOT INSTALLED, SKIPPING ---"
   fi
 
-  echo "--- GUARDANDO LISTAS DE PAQUETES ---"
+  echo "--- SAVING PACKAGE LISTS ---"
   apt-mark showmanual | sort > "$BACKUP_DIR/apt_list.txt"
   if command -v apt >/dev/null 2>&1; then
     save_snapshot_if_possible "apt upgradable after" \
@@ -196,7 +207,7 @@ execute_real() {
       snap refresh --list
   fi
 
-  echo "--- TODO LISTO: Sistema actualizado y snapshots guardados en $BACKUP_DIR ---"
+  echo "--- DONE: System updated and snapshots saved in $BACKUP_DIR ---"
 }
 
 main() {
