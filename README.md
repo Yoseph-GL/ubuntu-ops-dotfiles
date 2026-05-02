@@ -2,7 +2,18 @@
 
 # Ubuntu Ops Dotfiles
 
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Bash](https://img.shields.io/badge/bash-5.0%2B-4EAA25?logo=gnu-bash&logoColor=white)
+![Ubuntu](https://img.shields.io/badge/ubuntu-20.04%2B-E95420?logo=ubuntu&logoColor=white)
+
 Personal operations scripts for maintenance, diagnostics, Docker housekeeping, and backup/snapshot workflows.
+
+## Table of Contents
+
+1. [Directory Tree](#directory-tree)
+2. [Module Overview](#module-overview)
+3. [Quick Start & Activation](#quick-start--activation)
+4. [Usage](#usage)
 
 ## Directory Tree
 
