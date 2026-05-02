@@ -28,8 +28,8 @@ Scripts safely create required destination directories with `mkdir -p`.
 Updates packages (`apt`, `snap`, `flatpak`) and writes package state snapshots.
 
 ```bash
-./update-all --run
-./update-all --run --backup-dir "$HOME/Backups/Snapshots/Config_Dumps"
+./maintenance/update-all --run
+./maintenance/update-all --run --backup-dir "$HOME/Backups/Snapshots/Config_Dumps"
 ```
 
 ### `maintenance-all`
@@ -39,9 +39,9 @@ Orchestrates:
 2. `disk-clean-safe --deep-system-clean`
 
 ```bash
-./maintenance-all --run
-./maintenance-all --run --days 30
-./maintenance-all --run --backup-dir "$HOME/Backups/Snapshots"
+./maintenance/maintenance-all --run
+./maintenance/maintenance-all --run --days 30
+./maintenance/maintenance-all --run --backup-dir "$HOME/Backups/Snapshots"
 ```
 
 ### `disk-clean-safe`
@@ -51,9 +51,9 @@ Safe cleanup of user-space reclaimable data (trash, cache, and old temporary fil
 Note: `--deep-system-clean` performs I/O-intensive operations (including journal vacuum) and may take several minutes to complete. This is expected behavior.
 
 ```bash
-./disk-clean-safe --run
-./disk-clean-safe --run --days 30
-./disk-clean-safe --run --deep-system-clean
+./system/disk-clean-safe --run
+./system/disk-clean-safe --run --days 30
+./system/disk-clean-safe --run --deep-system-clean
 ```
 
 ### `docker-clean-safe`
@@ -61,8 +61,8 @@ Note: `--deep-system-clean` performs I/O-intensive operations (including journal
 Safe cleanup of unused Docker artifacts.
 
 ```bash
-./docker-clean-safe --run
-./docker-clean-safe --run --with-volumes
+./docker/docker-clean-safe --run
+./docker/docker-clean-safe --run --with-volumes
 ```
 
 ## Backups
@@ -73,8 +73,8 @@ Creates a directory-structure-only snapshot of `$HOME` (no files).
 Includes a max-depth failsafe of 6 levels and excludes `Backups/` to avoid recursive destination capture.
 
 ```bash
-./backup-skeleton --run
-./backup-skeleton --run --dest "$HOME/Backups/Snapshots" --name home-skeleton
+./setup_and_backup/backup-skeleton --run
+./setup_and_backup/backup-skeleton --run --dest "$HOME/Backups/Snapshots" --name home-skeleton
 ```
 
 ### `restore-skeleton`
@@ -82,7 +82,7 @@ Includes a max-depth failsafe of 6 levels and excludes `Backups/` to avoid recur
 Recreates directory structure from a snapshot located under `$HOME/Backups/Snapshots`.
 
 ```bash
-./restore-skeleton --from "$HOME/Backups/Snapshots/home-skeleton" --to "$HOME/test-restore" --run
+./setup_and_backup/restore-skeleton --from "$HOME/Backups/Snapshots/home-skeleton" --to "$HOME/test-restore" --run
 ```
 
 ## Diagnostics
@@ -92,7 +92,7 @@ Recreates directory structure from a snapshot located under `$HOME/Backups/Snaps
 Quick host diagnostics (system, memory, disk, services, and common ports).
 
 ```bash
-./health-check --run
+./system/health-check --run
 ```
 
 ### `net-debug`
@@ -100,8 +100,8 @@ Quick host diagnostics (system, memory, disk, services, and common ports).
 Network diagnostics (IPs, default route, DNS, pings, and ports).
 
 ```bash
-./net-debug --run
-./net-debug --run --host github.com
+./network/net-debug --run
+./network/net-debug --run --host github.com
 ```
 
 ### `check-logs.sh`
@@ -109,7 +109,7 @@ Network diagnostics (IPs, default route, DNS, pings, and ports).
 Extended system/log diagnostics.
 
 ```bash
-./check-logs.sh --run
+./system/check-logs.sh --run
 ```
 
 ### `docker-net-audit.sh`
@@ -117,7 +117,7 @@ Extended system/log diagnostics.
 Docker network mapping audit (veth/container/bridge) and detection of networks without active containers.
 
 ```bash
-./docker-net-audit.sh --run
+./docker/docker-net-audit.sh --run
 ```
 
 ## Tooling
@@ -128,7 +128,7 @@ Configures the official k6 repository and installs `direnv`, `just`, and `k6`.
 k6 is used for performance testing by running JavaScript load scenarios (for example, `k6 run ./perf/smoke.js`).
 
 ```bash
-./install-direnv-just-k6 --run
+./setup_and_backup/install-direnv-just-k6 --run
 ```
 
 ### `lint-scripts`
@@ -136,7 +136,7 @@ k6 is used for performance testing by running JavaScript load scenarios (for exa
 Validates shell syntax (`bash -n`) and runs `shellcheck` when installed.
 
 ```bash
-./lint-scripts --run
+./maintenance/lint-scripts --run
 ```
 
 ## Quick Start
