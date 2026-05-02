@@ -97,7 +97,7 @@ run_or_note() {
 count_kernel_errors() {
   local count=0
   if command -v dmesg >/dev/null 2>&1; then
-    count="$(dmesg --level=err,crit --human 2>/dev/null | grep -v -E "$KERNEL_EXCLUDES" | wc -l || true)"
+    count="$(dmesg --level=err,crit --human 2>/dev/null | grep -v -E "$KERNEL_EXCLUDES" | grep -c . || true)"
   else
     log_warn "dmesg not available; kernel error count is 0"
   fi
@@ -137,12 +137,12 @@ execute_real() {
 
   print_section "CRASH REPORTS"
   local crash_count
-  crash_count="$(ls /var/crash/*.crash 2>/dev/null | wc -l || true)"
+  crash_count="$(find /var/crash -maxdepth 1 -type f -name '*.crash' 2>/dev/null | wc -l || true)"
   if [[ "$crash_count" == "0" ]]; then
     echo "No crash reports found."
   else
     echo "$crash_count crash report(s) in /var/crash/"
-    ls /var/crash/*.crash 2>/dev/null
+    find /var/crash -maxdepth 1 -type f -name '*.crash' 2>/dev/null
   fi
 
   print_section "MEMORY AND SWAP"
@@ -173,7 +173,7 @@ execute_real() {
   print_section "SUMMARY"
   printf '%-30s %s\n' "Kernel errors (filtered):" "$(count_kernel_errors)"
   printf '%-30s %s\n' "Warnings (filtered):" \
-    "$(journalctl -b -p warning --no-pager 2>/dev/null | grep -v -E "$WARNING_EXCLUDES" | wc -l)"
+    "$(journalctl -b -p warning --no-pager 2>/dev/null | grep -v -E "$WARNING_EXCLUDES" | grep -c .)"
   printf '%-30s %s\n' "Failed units:" \
     "$(systemctl --failed --no-pager | grep -c 'failed' 2>/dev/null || echo "0")"
   printf '%-30s %s\n' "Crash reports:" "$crash_count"

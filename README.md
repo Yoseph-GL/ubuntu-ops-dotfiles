@@ -21,14 +21,13 @@ Backup paths are restricted to:
 
 Scripts safely create required destination directories with `mkdir -p`.
 
-## Maintenance and Cleanup
+## Maintenance
 
 ### `update-all`
 
 Updates packages (`apt`, `snap`, `flatpak`) and writes package state snapshots.
 
 ```bash
-./update-all
 ./update-all --run
 ./update-all --run --backup-dir "$HOME/Backups/Snapshots/Config_Dumps"
 ```
@@ -40,7 +39,6 @@ Orchestrates:
 2. `disk-clean-safe --deep-system-clean`
 
 ```bash
-./maintenance-all
 ./maintenance-all --run
 ./maintenance-all --run --days 30
 ./maintenance-all --run --backup-dir "$HOME/Backups/Snapshots"
@@ -53,7 +51,6 @@ Safe cleanup of user-space reclaimable data (trash, cache, and old temporary fil
 Note: `--deep-system-clean` performs I/O-intensive operations (including journal vacuum) and may take several minutes to complete. This is expected behavior.
 
 ```bash
-./disk-clean-safe
 ./disk-clean-safe --run
 ./disk-clean-safe --run --days 30
 ./disk-clean-safe --run --deep-system-clean
@@ -64,12 +61,11 @@ Note: `--deep-system-clean` performs I/O-intensive operations (including journal
 Safe cleanup of unused Docker artifacts.
 
 ```bash
-./docker-clean-safe
 ./docker-clean-safe --run
 ./docker-clean-safe --run --with-volumes
 ```
 
-## Backups and Snapshots
+## Backups
 
 ### `backup-skeleton`
 
@@ -77,7 +73,6 @@ Creates a directory-structure-only snapshot of `$HOME` (no files).
 Includes a max-depth failsafe of 6 levels and excludes `Backups/` to avoid recursive destination capture.
 
 ```bash
-./backup-skeleton
 ./backup-skeleton --run
 ./backup-skeleton --run --dest "$HOME/Backups/Snapshots" --name home-skeleton
 ```
@@ -87,7 +82,6 @@ Includes a max-depth failsafe of 6 levels and excludes `Backups/` to avoid recur
 Recreates directory structure from a snapshot located under `$HOME/Backups/Snapshots`.
 
 ```bash
-./restore-skeleton --from "$HOME/Backups/Snapshots/home-skeleton"
 ./restore-skeleton --from "$HOME/Backups/Snapshots/home-skeleton" --to "$HOME/test-restore" --run
 ```
 
@@ -98,7 +92,6 @@ Recreates directory structure from a snapshot located under `$HOME/Backups/Snaps
 Quick host diagnostics (system, memory, disk, services, and common ports).
 
 ```bash
-./health-check
 ./health-check --run
 ```
 
@@ -107,7 +100,6 @@ Quick host diagnostics (system, memory, disk, services, and common ports).
 Network diagnostics (IPs, default route, DNS, pings, and ports).
 
 ```bash
-./net-debug
 ./net-debug --run
 ./net-debug --run --host github.com
 ```
@@ -117,7 +109,6 @@ Network diagnostics (IPs, default route, DNS, pings, and ports).
 Extended system/log diagnostics.
 
 ```bash
-./check-logs.sh
 ./check-logs.sh --run
 ```
 
@@ -126,7 +117,6 @@ Extended system/log diagnostics.
 Docker network mapping audit (veth/container/bridge) and detection of networks without active containers.
 
 ```bash
-./docker-net-audit.sh
 ./docker-net-audit.sh --run
 ```
 
@@ -135,9 +125,9 @@ Docker network mapping audit (veth/container/bridge) and detection of networks w
 ### `install-direnv-just-k6`
 
 Configures the official k6 repository and installs `direnv`, `just`, and `k6`.
+k6 is used for performance testing by running JavaScript load scenarios (for example, `k6 run ./perf/smoke.js`).
 
 ```bash
-./install-direnv-just-k6
 ./install-direnv-just-k6 --run
 ```
 
@@ -146,7 +136,6 @@ Configures the official k6 repository and installs `direnv`, `just`, and `k6`.
 Validates shell syntax (`bash -n`) and runs `shellcheck` when installed.
 
 ```bash
-./lint-scripts
 ./lint-scripts --run
 ```
 

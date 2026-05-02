@@ -52,6 +52,7 @@ parse_args() {
 
 check_dependencies() {
   require_cmd docker
+  require_cmd sudo
   require_cmd nsenter
   require_cmd ip
   require_cmd awk
@@ -75,25 +76,43 @@ audit_veth_map() {
   echo "CONTAINER ETH TO HOST VETH MAP"
   echo "----------------------------------------"
 
-  local cid name pid line ethname peer_idx host_veth master net_id net_name
+  local cid name pid iflink target_index host_veth master net_id net_name
   while IFS= read -r cid; do
     [[ -n "$cid" ]] || continue
     name="$(docker inspect -f '{{.Name}}' "$cid" | tr -d '/')"
     pid="$(docker inspect -f '{{.State.Pid}}' "$cid")"
     echo "-- $name --"
 
-    while IFS= read -r line; do
-      ethname="$(grep -oP 'eth\d+' <<<"$line")"
-      peer_idx="$(grep -oP '@if\K\d+' <<<"$line")"
-      host_veth="$(ip -o link | awk -v idx="$peer_idx" '$1 == idx":" {print $2}' | cut -d@ -f1)"
-      master="$(ip link show "$host_veth" 2>/dev/null | grep -oP 'master \K\S+' || true)"
-      net_name=""
-      if [[ -n "$master" ]]; then
-        net_id="${master#br-}"
-        net_name="$(docker network ls --no-trunc --format '{{.ID}} {{.Name}}' | awk -v id="$net_id" '$1 ~ "^"id {print $2}')"
-      fi
-      echo "  $ethname -> $host_veth -> $master [$net_name]"
-    done < <(nsenter -t "$pid" -n ip link 2>/dev/null | grep -E '^[0-9]+: eth')
+    if [[ "$pid" == "0" ]]; then
+      echo "  eth0 -> unavailable (container is not running)"
+      continue
+    fi
+
+    iflink=$(sudo -n nsenter -t "$pid" -n bash -c 'for d in /sys/class/net/*; do if [ "${d##*/}" != "lo" ]; then cat "$d/iflink" 2>/dev/null && break; fi; done')
+    if [[ -z "$iflink" ]]; then
+      echo "  eth0 -> unavailable (host network mode or interface not present)"
+      continue
+    fi
+
+    # The host-side veth index is what the container's eth0 considers its 'link' (peer)
+    target_index=$(sudo -n nsenter -t "$pid" -n ethtool -S eth0 2>/dev/null | grep peer_ifindex | awk '{print $2}')
+    if [[ -z "$target_index" ]]; then
+        # Fallback if ethtool is missing: use the iflink directly
+        target_index="$iflink"
+    fi
+    host_veth=$(ip -o link show | grep "^$target_index:" | sed -n 's/.* \(veth[^@]*\)@.*/\1/p')
+    if [[ -z "$host_veth" ]]; then
+      echo "  eth0 iflink $iflink -> veth mapping failed"
+      continue
+    fi
+
+    master="$(ip -o link show "$host_veth" 2>/dev/null | awk 'match($0, /master ([^ ]+)/, m) {print m[1]}')"
+    net_name=""
+    if [[ -n "$master" && "$master" == br-* ]]; then
+      net_id="${master#br-}"
+      net_name="$(docker network ls --no-trunc --format '{{.ID}} {{.Name}}' | awk -v id="$net_id" '$1 ~ "^"id {print $2; exit}')"
+    fi
+    echo "  eth0 iflink $iflink -> $host_veth -> ${master:-no-master} [${net_name:-unmapped}]"
   done < <(docker ps -q)
 }
 
@@ -102,12 +121,20 @@ list_unused_networks() {
   echo "DOCKER NETWORKS WITHOUT ACTIVE CONTAINERS"
   echo "----------------------------------------"
 
-  local id name count
-  docker network ls --format '{{.ID}} {{.Name}}' | while IFS= read -r id name; do
-    [[ -n "$id" ]] || continue
-    count="$(docker network inspect "$id" --format '{{len .Containers}}')"
-    if [[ "$count" -eq 0 && "$name" != "bridge" && "$name" != "host" && "$name" != "none" ]]; then
-      echo "  $name ($id) has no active containers"
+  local net_id net_name containers
+  docker network ls --format '{{.ID}} {{.Name}}' | while read -r net_id net_name; do
+    [[ -n "$net_id" ]] || continue
+    if [[ "$net_name" == "bridge" || "$net_name" == "host" || "$net_name" == "none" ]]; then
+      continue
+    fi
+
+    if ! containers="$(docker network inspect "$net_id" -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null)"; then
+      echo "  Network: $net_name ($net_id) could not be inspected."
+      continue
+    fi
+
+    if [[ -z "$containers" ]]; then
+      echo "  Network: $net_name ($net_id) has no active containers."
     fi
   done
 }

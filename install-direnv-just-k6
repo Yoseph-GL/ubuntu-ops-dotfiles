@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
 MODE="dry-run"
+K6_KEY_URL="https://dl.k6.io/key.gpg"
+K6_KEYRING="/etc/apt/keyrings/k6.gpg"
+K6_LIST_FILE="/etc/apt/sources.list.d/k6.list"
+K6_SOURCE_LINE="deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main"
 
 usage() {
   cat <<'USAGE'
@@ -26,6 +30,10 @@ die() { log_err "$*"; exit 1; }
 require_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+apt_get_noninteractive() {
+  sudo -n DEBIAN_FRONTEND=noninteractive apt-get "$@"
 }
 
 reject_run_flag_typo() {
@@ -60,6 +68,8 @@ check_dependencies() {
   require_cmd gpg
   require_cmd apt-get
   require_cmd tee
+  require_cmd install
+  require_cmd mktemp
 }
 
 execute_dry_run() {
@@ -68,35 +78,46 @@ execute_dry_run() {
   echo "Mode: $MODE"
   echo
   echo "Would run:"
-  echo "  sudo install -d -m 0755 /etc/apt/keyrings"
-  echo "  curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/k6.gpg"
-  echo "  sudo chmod 0644 /etc/apt/keyrings/k6.gpg"
-  echo "  echo \"deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main\" | sudo tee /etc/apt/sources.list.d/k6.list"
-  echo "  sudo apt-get update"
-  echo "  sudo apt-get install -y --no-install-recommends direnv just k6"
+  echo "  sudo -n install -d -m 0755 /etc/apt/keyrings"
+  echo "  curl -fsSL https://dl.k6.io/key.gpg > /tmp/k6.key.gpg"
+  echo "  sudo -n gpg --dearmor --yes -o /etc/apt/keyrings/k6.gpg /tmp/k6.key.gpg"
+  echo "  sudo -n chmod 0644 /etc/apt/keyrings/k6.gpg"
+  echo "  echo \"deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main\" | sudo -n tee /etc/apt/sources.list.d/k6.list"
+  echo "  sudo -n DEBIAN_FRONTEND=noninteractive apt-get update"
+  echo "  sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends direnv just k6"
+  echo "  command -v direnv just k6"
   echo
   echo "Dry-run only. Re-run with --run to execute."
 }
 
 execute_real() {
+  local tmp_key
   check_dependencies
-  sudo -v || die "sudo authentication failed."
+  sudo -n -v || die "sudo credentials unavailable in non-interactive mode."
 
-  sudo install -d -m 0755 /etc/apt/keyrings
+  tmp_key="$(mktemp)"
+  trap 'rm -f "$tmp_key"' RETURN
 
-  if [[ ! -f /etc/apt/keyrings/k6.gpg ]]; then
-    log_info "Adding k6 apt keyring"
-    curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/k6.gpg
-    sudo chmod 0644 /etc/apt/keyrings/k6.gpg
-  fi
+  log_info "Preparing apt keyrings directory"
+  sudo -n install -d -m 0755 /etc/apt/keyrings
 
-  log_info "Configuring k6 apt source"
-  echo "deb [signed-by=/etc/apt/keyrings/k6.gpg] https://dl.k6.io/deb stable main" \
-    | sudo tee /etc/apt/sources.list.d/k6.list >/dev/null
+  log_info "Downloading Grafana k6 GPG key"
+  curl -fsSL "$K6_KEY_URL" -o "$tmp_key"
+  log_info "Installing Grafana k6 keyring"
+  sudo -n gpg --dearmor --yes -o "$K6_KEYRING" "$tmp_key"
+  sudo -n chmod 0644 "$K6_KEYRING"
 
+  log_info "Configuring Grafana k6 apt source"
+  printf '%s\n' "$K6_SOURCE_LINE" | sudo -n tee "$K6_LIST_FILE" >/dev/null
+
+  log_info "Updating package metadata"
+  apt_get_noninteractive update
   log_info "Installing packages"
-  sudo apt-get update
-  sudo apt-get install -y --no-install-recommends direnv just k6
+  apt_get_noninteractive install -y --no-install-recommends direnv just k6
+
+  command -v direnv >/dev/null 2>&1 || die "direnv installation validation failed"
+  command -v just >/dev/null 2>&1 || die "just installation validation failed"
+  command -v k6 >/dev/null 2>&1 || die "k6 installation validation failed"
 
   echo
   echo "Installed versions:"
