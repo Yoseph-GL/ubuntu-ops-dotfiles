@@ -12,7 +12,7 @@ MODE="dry-run"
 DAYS=14
 BACKUP_DIR="$CONFIG_DUMPS_DIR"
 UPDATE_CMD="$SCRIPT_DIR/update-all"
-CLEAN_CMD="$SCRIPT_DIR/disk-clean-safe"
+CLEAN_CMD="$SCRIPT_DIR/../system/disk-clean-safe"
 
 usage() {
   cat <<'USAGE'
