@@ -135,4 +135,4 @@ docker-net-audit.sh --run
 
 > **Environment Note:** These tools rely on a very specific local setup (for example `$HOME/Backups/Snapshots`, non-interactive `sudo`, systemd/journalctl availability, and local Docker/network conventions).
 
- > Note: These scripts were created with the help of AI agents, but they are fully tailored to my own operational needs. After troubleshooting laptop issues and spending time fixing them, I automated the end‑to‑end diagnostics so I can recover quickly if it happens again.
+ > **Personal Note:** These scripts were created with the help of AI agents, but they are fully tailored to my own operational needs. After troubleshooting laptop issues and spending time fixing them, I automated the end‑to‑end diagnostics so I can recover quickly if it happens again.
