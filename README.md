@@ -1,21 +1,10 @@
-> **WARNING:** This repository is my personal, highly opinionated setup. It includes hardcoded paths, environment assumptions, and custom backup routines tailored to my machine. Do **not** run these scripts blindly on your system; use them as reference and adapt carefully.
-
 # Ubuntu Ops Dotfiles
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Bash](https://img.shields.io/badge/bash-5.0%2B-4EAA25?logo=gnu-bash&logoColor=white)
-![Ubuntu](https://img.shields.io/badge/ubuntu-20.04%2B-E95420?logo=ubuntu&logoColor=white)
+Personal operations scripts for maintenance, diagnostics, Docker housekeeping,
+and backup/snapshot workflows. Hardcoded paths and environment assumptions
+specific to the author's machine. Review before executing.
 
-Personal operations scripts for maintenance, diagnostics, Docker housekeeping, and backup/snapshot workflows.
-
-## Table of Contents
-
-1. [Directory Tree](#directory-tree)
-2. [Module Overview](#module-overview)
-3. [Quick Start & Activation](#quick-start--activation)
-4. [Usage](#usage)
-
-## Directory Tree
+## Structure
 
 ```text
 .
@@ -40,51 +29,33 @@ Personal operations scripts for maintenance, diagnostics, Docker housekeeping, a
 └── README.md
 ```
 
-## Module Overview
+## Modules
 
-- **setup_and_backup/**: Home-directory skeleton backup/restore flows and a personal bootstrap installer for `direnv`, `just`, and `k6`.
-- **maintenance/**: System update orchestration (`apt`, `snap`, `flatpak`) plus script lint/syntax checks.
-- **system/**: Host health checks, disk cleanup routines, and deeper journal/systemd log diagnostics.
-- **network/**: Fast network triage (IPs, routes, DNS, pings, and listening ports).
-- **docker/**: Safe Docker cleanup and container-network mapping/audit utilities.
+- **setup_and_backup/**: home-directory skeleton backup/restore, bootstrap installer for `direnv`, `just`, `k6`.
+- **maintenance/**: system update orchestration (`apt`, `snap`, `flatpak`), script lint/syntax checks.
+- **system/**: host health checks, disk cleanup, journald/systemd log diagnostics.
+- **network/**: fast network triage (IPs, routes, DNS, pings, listening ports).
+- **docker/**: safe Docker cleanup, container-network mapping/audit.
 
-## Quick Start & Activation
-
-1. Clone the repository:
+## Quickstart
 
 ```bash
 git clone https://github.com/Yoseph-GL/ubuntu-ops-dotfiles.git /home/joseph/Workspace/ops/scripts/ubuntu-ops-dotfiles
 cd /home/joseph/Workspace/ops/scripts/ubuntu-ops-dotfiles
-```
-
-2. Make scripts executable:
-
-```bash
 chmod +x docker/* system/* network/* maintenance/* setup_and_backup/*
 ```
 
-3. Export folders to your `PATH`:
-
-For **Bash** (`~/.bashrc`) and **Zsh** (`~/.zshrc`):
+Add to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 export UBUNTU_OPS_DOTFILES="/home/joseph/Workspace/ops/scripts/ubuntu-ops-dotfiles"
 export PATH="$UBUNTU_OPS_DOTFILES/docker:$UBUNTU_OPS_DOTFILES/system:$UBUNTU_OPS_DOTFILES/network:$UBUNTU_OPS_DOTFILES/maintenance:$UBUNTU_OPS_DOTFILES/setup_and_backup:$PATH"
 ```
 
-> If you clone this repository to a different location, update `UBUNTU_OPS_DOTFILES` to match your local path.
-
-4. Reload your shell:
+Reload and verify:
 
 ```bash
-source ~/.bashrc
-# or
-source ~/.zshrc
-```
-
-5. Verify activation:
-
-```bash
+source ~/.bashrc   # or source ~/.zshrc
 health-check --help
 maintenance-all --help
 backup-skeleton --help
@@ -132,7 +103,3 @@ docker-clean-safe
 docker-clean-safe --run --with-volumes
 docker-net-audit.sh --run
 ```
-
-> **Environment Note:** These tools rely on a very specific local setup (for example `$HOME/Backups/Snapshots`, non-interactive `sudo`, systemd/journalctl availability, and local Docker/network conventions).
-
- > **Personal Note:** These scripts were created with the help of AI agents, but they are fully tailored to my own operational needs. After troubleshooting laptop issues and spending time fixing them, I automated the end‑to‑end diagnostics so I can recover quickly if it happens again.
